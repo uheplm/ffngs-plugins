@@ -1,0 +1,8 @@
+{
+  "settings": {
+    "poll_interval": {
+      "label": "Playback polling interval",
+      "description": "How often playback status is checked, in seconds (1–60)."
+    }
+  }
+}

@@ -53,6 +53,7 @@ local logLines = {}
 local logStreamStarted = false
 local logStreamError = nil
 local servicePollInFlight = false
+local appIconPaths = {}
 local load_status
 local render
 
@@ -60,6 +61,27 @@ local DAEMON_REPOSITORY = "https://github.com/uheplm/nnmxd.git"
 
 local function default_config()
     return noctalia.json.decode(noctalia.json.encode(DEFAULTS))
+end
+
+local function app_icon(appId)
+    local cached = appIconPaths[appId]
+    if cached == nil then
+        cached = { path = noctalia.appIconPath(appId, 40) }
+        appIconPaths[appId] = cached
+    end
+    if type(cached.path) == "string" then
+        return ui.image({
+            path = cached.path,
+            width = 40,
+            height = 40,
+            fit = "contain",
+        })
+    end
+    return ui.glyph({
+        name = "window",
+        size = 28,
+        color = "primary",
+    })
 end
 
 local function parse_action_options(output, sectionName)
@@ -1213,7 +1235,7 @@ render = function()
                     fill = "surface_container",
                     radius = 12,
                 }, {
-                    ui.label({ text = "▣", color = "primary", fontSize = 20 }),
+                    app_icon(appId),
                     ui.column({ flexGrow = 1, gap = 3 }, {
                         ui.label({ text = appId, fontWeight = "semibold", maxLines = 1 }),
                         ui.label({ text = title, color = "on_surface_variant", maxLines = 1 }),
