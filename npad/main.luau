@@ -138,7 +138,7 @@ local function render()
         local includeInMarked = if showAllHidden then isHidden else isFromFocusedWorkspace
 
         if includeInMarked then
-            local stateLabel = if liveState == nil then "Unavailable" elseif isHidden then nil else "Marked"
+            local stateLabel = if liveState == nil then "Unavailable" else nil
             local actionLabel = if isHidden then "Restore" else "Hide"
             local actionGlyph = if isHidden then "eye" else "eye-off"
             local originWorkspaceName = if showAllHidden then
@@ -286,6 +286,7 @@ local function render()
         if preventSelectingScratch then
             table.insert(headerChildren, ui.button({
                 text = "Open Scratch",
+                glyph = "wallpaper",
                 enabled = scratchWorkspaceIndex ~= nil,
                 onClick = function()
                     if scratchWorkspaceIndex == nil then

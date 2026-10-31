@@ -1,0 +1,1434 @@
+--!nonstrict
+
+local DEFAULTS = {
+    version = 1,
+    device = {
+        autoDetect = true,
+        path = "",
+        triggerButton = "BTN_FORWARD",
+    },
+    defaultPresetId = "default",
+    presets = {
+        {
+            id = "default",
+            name = "Default",
+            mode = "gesture",
+            threshold = 100,
+            escalation = 250,
+            metaKey = "KEY_LEFTMETA",
+            bindings = {
+                left = { type = "niri", value = "focus-column-left" },
+                right = { type = "niri", value = "focus-column-right" },
+                up = { type = "niri", value = "focus-workspace-up" },
+                down = { type = "niri", value = "focus-workspace-down" },
+                tap = { type = "niri", value = "toggle-overview" },
+                scrollUp = { type = "niri", value = "focus-workspace-up" },
+                scrollDown = { type = "niri", value = "focus-workspace-down" },
+            },
+        },
+    },
+    appPresets = {},
+}
+
+local CONFIG_PATH = nil
+local STATUS_PATH = nil
+local CANDIDATE_PATH = nil
+local config = nil
+local status = nil
+local daemonInstalled = nil
+local serviceEnabled = nil
+local serviceActive = nil
+local windows = {}
+local selectedPresetId = "default"
+local message = ""
+local saving = false
+local installing = false
+local installStep = ""
+local installOutput = ""
+local activePage = "overview"
+local nextPresetNumber = 0
+local selectedActionKey = "left"
+local actionOptions = { niri = {}, noctalia = {} }
+local logLines = {}
+local logStreamStarted = false
+local logStreamError = nil
+local servicePollInFlight = false
+local load_status
+local render
+
+local DAEMON_REPOSITORY = "https://github.com/uheplm/nnmxd.git"
+
+local function default_config()
+    return noctalia.json.decode(noctalia.json.encode(DEFAULTS))
+end
+
+local function parse_action_options(output, sectionName)
+    local options = {}
+    local inSection = false
+    for line in string.gmatch(output .. "\n", "([^\n]*)\n") do
+        if line == sectionName .. ":" then
+            inSection = true
+        elseif inSection then
+            local indent = #line - #string.gsub(line, "^ *", "")
+            if indent == 2 then
+                local name = string.match(line, "^%s+(%S+)")
+                if name ~= nil then
+                    table.insert(options, name)
+                end
+            elseif line ~= "" and indent == 0 then
+                break
+            end
+        end
+    end
+    return options
+end
+
+local function parse_media_action_options(output)
+    local options = {}
+    local actionLine = string.match(output, "[^\n]*<action>[^\n]*one of:[^\n]*")
+    local actions = if actionLine ~= nil then string.match(actionLine, "one of:%s*(.-)%s*$") else nil
+    if actions ~= nil then
+        for action in string.gmatch(actions, "[%w%-]+") do
+            table.insert(options, "media " .. action)
+        end
+    end
+    return options
+end
+
+local function load_action_options()
+    local function load_media_actions()
+        local started = noctalia.runAsync({ "noctalia", "msg", "media", "--help" }, function(result)
+            if result.timedOut or result.exitCode ~= 0 then
+                local detail = result.stderr ~= "" and result.stderr
+                    or result.stdout ~= "" and result.stdout
+                    or `exit status {result.exitCode}`
+                message = `Could not load Noctalia media choices: {detail}`
+                render()
+                return
+            end
+
+            local mediaOptions = parse_media_action_options((result.stdout or "") .. "\n" .. (result.stderr or ""))
+            if #mediaOptions == 0 then
+                message = "Could not find media actions in Noctalia help."
+                render()
+                return
+            end
+
+            for _, option in ipairs(mediaOptions) do
+                table.insert(actionOptions.noctalia, option)
+            end
+            render()
+        end, 10000)
+        if not started then
+            message = "Could not start Noctalia to load media choices."
+            render()
+        end
+    end
+
+    local function load_one(label, command, section, key, acceptHelpExit)
+        local started = noctalia.runAsync(command, function(result)
+            local output = (result.stdout or "") .. "\n" .. (result.stderr or "")
+            local options = parse_action_options(output, section)
+            if result.timedOut
+                or (#options == 0)
+                or (result.exitCode ~= 0 and not acceptHelpExit)
+            then
+                local stderr = if type(result.stderr) == "string" then result.stderr else ""
+                local stdout = if type(result.stdout) == "string" then result.stdout else ""
+                local detail = stderr ~= "" and stderr
+                    or stdout ~= "" and stdout
+                    or `exit status {result.exitCode}`
+                message = `Could not load {label} choices: {detail}`
+                render()
+                return
+            end
+            actionOptions[key] = options
+            render()
+            if key == "noctalia" then
+                load_media_actions()
+            end
+        end, 10000)
+        if not started then
+            message = `Could not start {label} to load action choices.`
+            render()
+        end
+    end
+
+    load_one("Niri", { "niri", "msg", "action" }, "Actions", "niri", true)
+    load_one("Noctalia", { "noctalia", "msg", "--help" }, "Commands", "noctalia", false)
+end
+
+local function config_path()
+    local configHome = noctalia.getenv("XDG_CONFIG_HOME")
+    if type(configHome) ~= "string" or configHome == "" or string.sub(configHome, 1, 1) ~= "/" then
+        local home = noctalia.getenv("HOME")
+        if type(home) ~= "string" or home == "" then
+            return nil
+        end
+        configHome = home .. "/.config"
+    end
+    return configHome .. "/mxmouse/config.json"
+end
+
+local function check_service()
+    serviceEnabled = nil
+    render()
+    local started = noctalia.runAsync({ "systemctl", "--user", "is-enabled", "nnmxd.service" }, function(result)
+        serviceEnabled = not result.timedOut and result.exitCode == 0
+        if not serviceEnabled then
+            serviceActive = false
+            render()
+            return
+        end
+        local activeStarted = noctalia.runAsync({ "systemctl", "--user", "is-active", "nnmxd.service" }, function(activeResult)
+            serviceActive = not activeResult.timedOut and activeResult.exitCode == 0
+            load_status()
+            render()
+        end, 3000)
+        if not activeStarted then
+            serviceActive = false
+            message = "Could not start systemctl to check nnmxd service status."
+            render()
+        end
+    end, 3000)
+    if not started then
+        serviceEnabled = false
+        serviceActive = false
+        message = "Could not start systemctl to check nnmxd service status."
+        render()
+    end
+end
+
+local function poll_service_status()
+    if daemonInstalled ~= true or servicePollInFlight then
+        return
+    end
+
+    servicePollInFlight = true
+    local started = noctalia.runAsync({ "systemctl", "--user", "is-active", "nnmxd.service" }, function(result)
+        servicePollInFlight = false
+        serviceActive = not result.timedOut and result.exitCode == 0
+        load_status()
+        render()
+    end, 3000)
+    if not started then
+        servicePollInFlight = false
+        message = "Could not start systemctl to refresh nnmxd service status."
+        render()
+    end
+end
+
+local function check_daemon()
+    daemonInstalled = nil
+    serviceEnabled = nil
+    render()
+    local daemonCommand = "nnmxd"
+    local home = noctalia.getenv("HOME")
+    if type(home) == "string" and home ~= "" and noctalia.fileExists(home .. "/.local/bin/nnmxd") then
+        daemonCommand = home .. "/.local/bin/nnmxd"
+    end
+    local started = noctalia.runAsync({ daemonCommand, "--version" }, function(result)
+        daemonInstalled = not result.timedOut and result.exitCode == 0
+        if daemonInstalled then
+            check_service()
+        else
+            serviceActive = false
+            status = nil
+            render()
+        end
+    end, 3000)
+    if not started then
+        daemonInstalled = false
+        serviceActive = false
+        render()
+    end
+end
+
+local function append_install_output(label, result)
+    local chunks = {}
+    if type(result.stdout) == "string" and result.stdout ~= "" then
+        table.insert(chunks, result.stdout)
+    end
+    if type(result.stderr) == "string" and result.stderr ~= "" then
+        table.insert(chunks, result.stderr)
+    end
+    if #chunks > 0 then
+        installOutput ..= `\n$ {label}\n{table.concat(chunks, "\n")}`
+        if #installOutput > 6000 then
+            installOutput = string.sub(installOutput, #installOutput - 5999)
+        end
+    end
+end
+
+local function install_failed(label, result)
+    installing = false
+    installStep = ""
+    local detail = result.stderr ~= "" and result.stderr
+        or result.stdout ~= "" and result.stdout
+    if detail == nil or detail == "" then
+        detail = if result.timedOut then "command timed out" else `exit status {result.exitCode}`
+    end
+    message = `nnmxd installation failed during {label}: {detail}`
+    render()
+end
+
+local function install_nnmxd()
+    if installing then
+        return
+    end
+    local home = noctalia.getenv("HOME")
+    if type(home) ~= "string" or home == "" then
+        message = "Could not resolve HOME; cannot install nnmxd."
+        render()
+        return
+    end
+    local sourcePath = home .. "/.local/src/nnmxd"
+    local sourceParent = home .. "/.local/src"
+    installing = true
+    installOutput = ""
+    installStep = "Preparing source directory"
+    message = "The wizard will clone the source, build nnmxd, install its user unit, and enable the service."
+    render()
+
+    local function run_install()
+        local function install_project()
+            installStep = "Building and installing nnmxd"
+            render()
+            local started = noctalia.runAsync({ "make", "-C", sourcePath, "install" }, function(result)
+                append_install_output("make install", result)
+                if result.timedOut or result.exitCode ~= 0 then
+                    install_failed("make install", result)
+                    return
+                end
+
+                installStep = "Verifying installation"
+                render()
+                local binary = home .. "/.local/bin/nnmxd"
+                local verifyStarted = noctalia.runAsync({ binary, "--version" }, function(verifyResult)
+                    append_install_output("nnmxd --version", verifyResult)
+                    if verifyResult.timedOut or verifyResult.exitCode ~= 0 then
+                        install_failed("verification", verifyResult)
+                        return
+                    end
+                    installing = false
+                    installStep = ""
+                    daemonInstalled = true
+                    message = "nnmxd installed; its user service was enabled and started."
+                    check_service()
+                    render()
+                end, 3000)
+                if not verifyStarted then
+                    installing = false
+                    installStep = ""
+                    daemonInstalled = false
+                    message = "Installation finished, but the nnmxd binary could not be started for verification."
+                    render()
+                end
+            end, 300000)
+            if not started then
+                installing = false
+                installStep = ""
+                message = "Could not start make to build nnmxd."
+                render()
+            end
+        end
+
+        if noctalia.fileExists(sourcePath .. "/Makefile") then
+            install_project()
+            return
+        end
+
+        installStep = "Cloning nnmxd source"
+        render()
+        local cloneStarted = noctalia.runAsync({
+            "git", "clone", "--depth", "1", DAEMON_REPOSITORY, sourcePath,
+        }, function(result)
+            append_install_output("git clone", result)
+            if result.timedOut or result.exitCode ~= 0 then
+                install_failed("git clone", result)
+                return
+            end
+            install_project()
+        end, 120000)
+        if not cloneStarted then
+            installing = false
+            installStep = ""
+            message = "Could not start git to clone nnmxd."
+            render()
+        end
+    end
+
+    local mkdirStarted = noctalia.runAsync({ "mkdir", "-p", sourceParent }, function(result)
+        append_install_output("mkdir source directory", result)
+        if result.timedOut or result.exitCode ~= 0 then
+            install_failed("source directory setup", result)
+            return
+        end
+        run_install()
+    end, 5000)
+    if not mkdirStarted then
+        installing = false
+        installStep = ""
+        message = "Could not create the nnmxd source directory."
+        render()
+    end
+end
+
+local function status_path()
+    local runtimeDir = noctalia.getenv("XDG_RUNTIME_DIR")
+    if type(runtimeDir) ~= "string" or runtimeDir == "" then
+        return nil
+    end
+    return runtimeDir .. "/mxmouse/status.json"
+end
+
+local function selected_preset()
+    for _, preset in ipairs(config.presets) do
+        if preset.id == selectedPresetId then
+            return preset
+        end
+    end
+    selectedPresetId = config.defaultPresetId
+    for _, preset in ipairs(config.presets) do
+        if preset.id == selectedPresetId then
+            return preset
+        end
+    end
+    return config.presets[1]
+end
+
+local function load_config()
+    CONFIG_PATH = config_path()
+    STATUS_PATH = status_path()
+    if CONFIG_PATH == nil then
+        message = "Could not resolve the user configuration directory."
+        config = default_config()
+        return
+    end
+    if not noctalia.fileExists(CONFIG_PATH) then
+        config = default_config()
+        return
+    end
+
+    local contents, readError = noctalia.readFile(CONFIG_PATH)
+    if type(contents) ~= "string" then
+        message = `Could not read {CONFIG_PATH}: {tostring(readError)}`
+        config = default_config()
+        return
+    end
+    local ok, decoded = pcall(noctalia.json.decode, contents)
+    if not ok or type(decoded) ~= "table"
+        or type(decoded.presets) ~= "table"
+        or #decoded.presets == 0
+        or type(decoded.device) ~= "table"
+    then
+        message = "The service configuration is invalid JSON or has no presets."
+        config = default_config()
+        return
+    end
+    decoded.appPresets = if type(decoded.appPresets) == "table" then decoded.appPresets else {}
+    decoded.metaStateFile = nil
+    decoded.writeWaybar = nil
+    for _, preset in ipairs(decoded.presets) do
+        if type(preset) ~= "table" or type(preset.id) ~= "string" or type(preset.name) ~= "string" then
+            message = "The service configuration contains a malformed preset."
+            config = default_config()
+            return
+        end
+        if type(preset.bindings) ~= "table" then
+            preset.bindings = {}
+        end
+        for key in pairs(DEFAULTS.presets[1].bindings) do
+            local binding = preset.bindings[key]
+            if type(binding) == "string" then
+                local actionName, oldArguments = string.match(binding, "^(%S+)%s*(.*)$")
+                preset.bindings[key] = {
+                    type = "niri",
+                    value = actionName or binding,
+                    arguments = oldArguments or "",
+                }
+            elseif type(binding) ~= "table" then
+                preset.bindings[key] = { type = "niri", value = "" }
+            else
+                binding.type = if binding.type == "niri"
+                    or binding.type == "noctalia"
+                    or binding.type == "command"
+                    then binding.type else "niri"
+                binding.value = if type(binding.value) == "string" then binding.value else ""
+                binding.arguments = if type(binding.arguments) == "string" then binding.arguments else ""
+                if binding.type ~= "command" then
+                    local actionName, oldArguments = string.match(binding.value, "^(%S+)%s*(.*)$")
+                    if actionName ~= nil and oldArguments ~= "" then
+                        binding.value = actionName
+                        if binding.arguments == "" then
+                            binding.arguments = oldArguments
+                        end
+                    end
+                end
+            end
+        end
+        preset.mode = if preset.mode == "meta-toggle" then "meta-toggle" else "gesture"
+        preset.threshold = if type(preset.threshold) == "number" then preset.threshold else 100
+        preset.escalation = if type(preset.escalation) == "number" then preset.escalation else 250
+        preset.metaKey = if type(preset.metaKey) == "string" then preset.metaKey else "KEY_LEFTMETA"
+    end
+    if type(decoded.defaultPresetId) ~= "string" then
+        decoded.defaultPresetId = decoded.presets[1].id
+    end
+    if type(decoded.device.autoDetect) ~= "boolean" then
+        decoded.device.autoDetect = true
+    end
+    if type(decoded.device.path) ~= "string" then
+        decoded.device.path = ""
+    end
+    if type(decoded.device.triggerButton) ~= "string" or decoded.device.triggerButton == "" then
+        decoded.device.triggerButton = "BTN_FORWARD"
+    end
+    config = decoded
+    selectedPresetId = config.defaultPresetId or config.presets[1].id
+end
+
+load_status = function()
+    status = nil
+    if STATUS_PATH == nil or not noctalia.fileExists(STATUS_PATH) then
+        return
+    end
+    local contents, readError = noctalia.readFile(STATUS_PATH)
+    if type(contents) ~= "string" then
+        message = `Could not read service status: {tostring(readError)}`
+        return
+    end
+    local ok, decoded = pcall(noctalia.json.decode, contents)
+    if ok and type(decoded) == "table" then
+        status = decoded
+    else
+        message = "Could not parse mxmouse service status."
+    end
+end
+
+local function refresh_windows()
+    local started = noctalia.runAsync({ "niri", "msg", "--json", "windows" }, function(result)
+        if result.timedOut or result.exitCode ~= 0 then
+            local detail = result.stderr ~= "" and result.stderr
+                or result.stdout ~= "" and result.stdout
+                or `exit status {result.exitCode}`
+            message = `Could not read Niri windows: {detail}`
+        else
+            local ok, decoded = pcall(noctalia.json.decode, result.stdout)
+            if not ok or type(decoded) ~= "table" then
+                message = "Could not parse Niri windows response."
+            else
+                windows = decoded
+            end
+        end
+        load_status()
+        render()
+    end, 5000)
+    if not started then
+        message = "Could not start Niri to list windows."
+    end
+end
+
+local function save_config()
+    if saving then
+        return
+    end
+    local dataDir, dirError = noctalia.pluginDataDir()
+    if type(dataDir) ~= "string" or dataDir == "" then
+        message = `Could not locate plugin data directory: {tostring(dirError)}`
+        render()
+        return
+    end
+    CANDIDATE_PATH = dataDir .. "/candidate-config.json"
+    local encoded, encodeError = noctalia.json.encode(config, true)
+    if type(encoded) ~= "string" then
+        message = `Could not encode configuration: {tostring(encodeError)}`
+        render()
+        return
+    end
+    local written, writeError = noctalia.writeFile(CANDIDATE_PATH, encoded)
+    if not written then
+        message = `Could not write temporary configuration: {tostring(writeError)}`
+        render()
+        return
+    end
+
+    saving = true
+    message = "Validating and saving configuration..."
+    render()
+    local serviceCommand = "nnmxd"
+    local home = noctalia.getenv("HOME")
+    if type(home) == "string" and home ~= "" and noctalia.fileExists(home .. "/.local/bin/nnmxd") then
+        serviceCommand = home .. "/.local/bin/nnmxd"
+    end
+    local started = noctalia.runAsync({ serviceCommand, "--apply-config", CANDIDATE_PATH }, function(result)
+        saving = false
+        if result.timedOut or result.exitCode ~= 0 then
+            local detail = result.stderr ~= "" and result.stderr
+                or result.stdout ~= "" and result.stdout
+                or `exit status {result.exitCode}`
+            message = `Could not apply configuration: {detail}`
+            noctalia.notifyError("MX Mouse", message)
+        else
+            message = "Configuration saved. Preset changes apply on the next thumb-button press."
+        end
+        render()
+    end, 10000)
+    if not started then
+        saving = false
+        message = "Could not start nnmxd to validate configuration."
+        noctalia.notifyError("MX Mouse", message)
+        render()
+    end
+end
+
+local function restart_service(successMessage)
+    local started = noctalia.runAsync({ "systemctl", "--user", "restart", "nnmxd.service" }, function(result)
+        if result.timedOut or result.exitCode ~= 0 then
+            local detail = result.stderr ~= "" and result.stderr
+                or result.stdout ~= "" and result.stdout
+                or `exit status {result.exitCode}`
+            message = `Could not restart nnmxd.service: {detail}`
+            noctalia.notifyError("MX Mouse", message)
+        else
+            message = successMessage or "Restarted nnmxd.service."
+        end
+        load_status()
+        render()
+        check_service()
+    end, 10000)
+    if not started then
+        message = "Could not start systemctl to restart the user service."
+        render()
+    end
+end
+
+local function start_log_stream()
+    if logStreamStarted then
+        return
+    end
+
+    logStreamStarted = true
+    logStreamError = nil
+    local started = noctalia.runStream(
+        "journalctl --user --unit=nnmxd.service --lines=100 --follow --no-pager --output=short-iso-precise 2>&1",
+        function(line)
+            table.insert(logLines, line)
+            if #logLines > 250 then
+                table.remove(logLines, 1)
+            end
+            if activePage == "logs" then
+                render()
+            end
+        end
+    )
+    if not started then
+        logStreamStarted = false
+        logStreamError = "Could not start the nnmxd journal stream."
+        render()
+    end
+end
+
+local function add_preset()
+    nextPresetNumber += 1
+    local id = `preset-{tostring(os.time())}-{tostring(nextPresetNumber)}`
+    local preset = {
+        id = id,
+        name = "New preset",
+        mode = "gesture",
+        threshold = 100,
+        escalation = 250,
+        metaKey = "KEY_LEFTMETA",
+        bindings = {
+            left = { type = "niri", value = "focus-column-left" },
+            right = { type = "niri", value = "focus-column-right" },
+            up = { type = "niri", value = "focus-workspace-up" },
+            down = { type = "niri", value = "focus-workspace-down" },
+            tap = { type = "niri", value = "toggle-overview" },
+            scrollUp = { type = "niri", value = "focus-workspace-up" },
+            scrollDown = { type = "niri", value = "focus-workspace-down" },
+        },
+    }
+    table.insert(config.presets, preset)
+    selectedPresetId = id
+    message = "New preset added. Edit it and save."
+    render()
+end
+
+local function delete_selected_preset()
+    if #config.presets <= 1 then
+        message = "Keep at least one preset."
+        render()
+        return
+    end
+    local deleting = selected_preset()
+    local replacement = config.presets[1]
+    for index, preset in ipairs(config.presets) do
+        if preset.id == deleting.id then
+            replacement = config.presets[index == #config.presets and index - 1 or index + 1]
+            table.remove(config.presets, index)
+            break
+        end
+    end
+    for appId, presetId in pairs(config.appPresets) do
+        if presetId == deleting.id then
+            config.appPresets[appId] = nil
+        end
+    end
+    if config.defaultPresetId == deleting.id then
+        config.defaultPresetId = replacement.id
+    end
+    selectedPresetId = replacement.id
+    message = `Deleted preset "{deleting.name}". Save to apply.`
+    render()
+end
+
+local function preset_editor(preset)
+    local children = {
+        ui.row({ align = "center", justify = "space_between", gap = 8 }, {
+            ui.column({ flexGrow = 1, gap = 2 }, {
+                ui.label({ text = "Preset profile", fontSize = 16, fontWeight = "bold" }),
+                ui.label({
+                    text = if config.defaultPresetId == preset.id then "Default profile" else "Custom profile",
+                    color = "on_surface_variant",
+                }),
+            }),
+            ui.button({
+                text = "Delete",
+                glyph = "trash",
+                variant = "destructive",
+                enabled = #config.presets > 1,
+                onClick = delete_selected_preset,
+            }),
+        }),
+        ui.input({
+            key = "preset-name-" .. preset.id,
+            value = preset.name,
+            placeholder = "Preset name",
+            onChange = function(value)
+                preset.name = value
+            end,
+        }),
+        ui.row({ gap = 8 }, {
+            ui.button({
+                text = "Gesture mode",
+                selected = preset.mode == "gesture",
+                onClick = function()
+                    preset.mode = "gesture"
+                    render()
+                end,
+            }),
+            ui.button({
+                text = "Meta toggle",
+                selected = preset.mode == "meta-toggle",
+                onClick = function()
+                    preset.mode = "meta-toggle"
+                    render()
+                end,
+            }),
+            ui.button({
+                text = "Make default",
+                selected = config.defaultPresetId == preset.id,
+                onClick = function()
+                    config.defaultPresetId = preset.id
+                    message = `"{preset.name}" is now the fallback preset. Save to apply.`
+                    render()
+                end,
+            }),
+        }),
+    }
+
+    if preset.mode == "gesture" then
+        table.insert(children, ui.row({ gap = 8 }, {
+            ui.column({ flexGrow = 1, gap = 4 }, {
+                ui.label({ text = "Movement threshold (device counts)" }),
+                ui.input({
+                    key = "threshold-" .. preset.id,
+                    value = tostring(preset.threshold),
+                    onChange = function(value)
+                        local number = tonumber(value)
+                        if number ~= nil and math.floor(number) == number then
+                            preset.threshold = number
+                        end
+                    end,
+                }),
+            }),
+            ui.column({ flexGrow = 1, gap = 4 }, {
+                ui.label({ text = "Additional distance per gesture step" }),
+                ui.input({
+                    key = "escalation-" .. preset.id,
+                    value = tostring(preset.escalation),
+                    onChange = function(value)
+                        local number = tonumber(value)
+                        if number ~= nil and math.floor(number) == number then
+                            preset.escalation = number
+                        end
+                    end,
+                }),
+            }),
+        }))
+        table.insert(children, ui.label({
+            text = "Select a direction or gesture below to edit its action. Shell commands run as your user.",
+            color = "on_surface_variant",
+        }))
+        local bindingNames = {
+            { "left", "Left", "arrow-left" }, { "right", "Right", "arrow-right" },
+            { "up", "Up", "arrow-up" }, { "down", "Down", "arrow-down" },
+            { "tap", "Tap", "hand-click" }, { "scrollUp", "Scroll up", "arrow-up" },
+            { "scrollDown", "Scroll down", "arrow-down" },
+        }
+        local function action_tab(entry)
+            local key = entry[1]
+            return ui.button({
+                key = `gesture-tab-{preset.id}-{key}`,
+                text = entry[2],
+                glyph = entry[3],
+                selected = selectedActionKey == key,
+                onClick = function()
+                    selectedActionKey = key
+                    render()
+                end,
+            })
+        end
+        table.insert(children, ui.column({ gap = 6 }, {
+            ui.row({ justify = "center", gap = 6 }, { action_tab(bindingNames[3]) }),
+            ui.row({ justify = "center", gap = 6 }, {
+                action_tab(bindingNames[1]),
+                action_tab(bindingNames[2]),
+            }),
+            ui.row({ justify = "center", gap = 6 }, { action_tab(bindingNames[4]) }),
+        }))
+        table.insert(children, ui.row({ justify = "center", gap = 6 }, {
+            action_tab(bindingNames[5]),
+            action_tab(bindingNames[6]),
+            action_tab(bindingNames[7]),
+        }))
+
+        local selectedEntry = nil
+        for _, entry in ipairs(bindingNames) do
+            if entry[1] == selectedActionKey then
+                selectedEntry = entry
+                break
+            end
+        end
+        selectedEntry = selectedEntry or bindingNames[1]
+        selectedActionKey = selectedEntry[1]
+
+        local function gesture_field(entry)
+            local key = entry[1]
+            local binding = preset.bindings[key]
+            local actionTypeNames = {
+                { "niri", "Niri" },
+                { "noctalia", "Noctalia" },
+                { "command", "Command" },
+            }
+            local choices = actionOptions[binding.type]
+            local choiceOptions = { "Choose an action…" }
+            if type(choices) == "table" then
+                for _, choice in ipairs(choices) do
+                    table.insert(choiceOptions, choice)
+                end
+            end
+            local choiceIndex = 0
+            for choiceIndexInList, choice in ipairs(choices or {}) do
+                if choice == binding.value then
+                    choiceIndex = choiceIndexInList
+                    break
+                end
+            end
+            local typeTabs = {}
+            for _, item in ipairs(actionTypeNames) do
+                local actionType = item[1]
+                table.insert(typeTabs, ui.button({
+                    key = `binding-type-{preset.id}-{key}-{actionType}`,
+                    text = item[2],
+                    selected = binding.type == actionType,
+                    onClick = function()
+                        binding.type = actionType
+                        binding.value = ""
+                        binding.arguments = ""
+                        render()
+                    end,
+                }))
+            end
+            local fields = {
+                ui.label({ text = `{entry[2]} action`, fontWeight = "semibold" }),
+                ui.row({ gap = 6 }, typeTabs),
+            }
+            if binding.type ~= "command" then
+                table.insert(fields, ui.select({
+                    key = `binding-choice-{preset.id}-{key}`,
+                    options = choiceOptions,
+                    selectedIndex = choiceIndex,
+                    onChange = function(value)
+                        local selected = tonumber(value)
+                        if selected == nil or selected <= 0 or selected > #choices then
+                            return
+                        end
+                        binding.value = choices[selected]
+                        render()
+                    end,
+                }))
+                table.insert(fields, ui.column({ gap = 3 }, {
+                    ui.label({ text = "Arguments (optional)", fontWeight = "medium" }),
+                    ui.label({
+                        text = "Appended after the action name. Quote arguments that contain spaces.",
+                        color = "on_surface_variant",
+                    }),
+                    ui.input({
+                        key = `binding-arguments-{preset.id}-{key}`,
+                        value = binding.arguments or "",
+                        placeholder = "e.g. 2 or \"ffngs/mxmouse:manager\"",
+                        flexGrow = 1,
+                        onChange = function(value)
+                            binding.arguments = value
+                        end,
+                    }),
+                }))
+            else
+                table.insert(fields, ui.column({ gap = 3 }, {
+                    ui.label({ text = "Shell command", fontWeight = "medium" }),
+                    ui.label({
+                        text = "Runs as your user. Use only commands you trust.",
+                        color = "on_surface_variant",
+                    }),
+                    ui.input({
+                        key = `binding-{preset.id}-{key}`,
+                        value = binding.value,
+                        placeholder = "e.g. notify-send 'Mouse gesture'",
+                        flexGrow = 1,
+                        onChange = function(value)
+                            binding.value = value
+                        end,
+                    }),
+                }))
+            end
+            return ui.column({ gap = 8, padding = 12, fill = "surface_container_high", radius = 12 }, fields)
+        end
+        table.insert(children, gesture_field(selectedEntry))
+    else
+        local keys = {
+            "KEY_LEFTMETA", "KEY_RIGHTMETA", "KEY_LEFTCTRL", "KEY_RIGHTCTRL",
+            "KEY_LEFTALT", "KEY_RIGHTALT", "KEY_LEFTSHIFT", "KEY_RIGHTSHIFT",
+        }
+        local index = 1
+        for i, key in ipairs(keys) do
+            if key == preset.metaKey then
+                index = i
+                break
+            end
+        end
+        table.insert(children, ui.label({ text = "Modifier key injected on each press" }))
+        table.insert(children, ui.button({
+            text = `Key: {preset.metaKey}`,
+            onClick = function()
+                preset.metaKey = keys[index % #keys + 1]
+                render()
+            end,
+        }))
+    end
+
+    return ui.column({ gap = 12, padding = 16, fill = "surface_container", radius = 14 }, children)
+end
+
+local function button_rows(buttons, buttonsPerRow)
+    local rows = {}
+    for start = 1, #buttons, buttonsPerRow do
+        local row = {}
+        for index = start, math.min(start + buttonsPerRow - 1, #buttons) do
+            table.insert(row, buttons[index])
+        end
+        table.insert(rows, ui.row({ gap = 8 }, row))
+    end
+    return rows
+end
+
+render = function()
+    if config == nil then
+        load_config()
+    end
+    if daemonInstalled ~= true or serviceEnabled ~= true then
+        local setupContent = {
+            ui.row({ align = "center", gap = 10 }, {
+                ui.label({ text = "MX", fontSize = 22, fontWeight = "bold", color = "primary" }),
+                ui.column({ flexGrow = 1, gap = 2 }, {
+                    ui.label({ text = "MX Mouse", fontSize = 22, fontWeight = "bold" }),
+                    ui.label({ text = "Niri controls for your MX Master", color = "on_surface_variant" }),
+                }),
+            }),
+        }
+        local setupStatus = if daemonInstalled == nil
+            then "Looking for nnmxd..."
+            elseif daemonInstalled == true and serviceEnabled == nil
+            then "Checking the nnmxd user service..."
+            elseif daemonInstalled == true
+            then "The daemon is installed, but its user service is not enabled."
+            else "Install the local daemon to start configuring your mouse."
+        table.insert(setupContent, ui.column({ gap = 8, padding = 18, fill = "surface_container", radius = 16 }, {
+            ui.label({ text = setupStatus, fontSize = 17, fontWeight = "bold" }),
+            ui.label({
+                text = "The setup wizard clones nnmxd from GitHub, builds it on this machine, and installs it as a user service. It requires git, make, Go, and input-device permissions. No sudo is used.",
+                color = "on_surface_variant",
+                maxLines = 4,
+            }),
+        }))
+        if daemonInstalled == false or serviceEnabled == false then
+            table.insert(setupContent, ui.row({ gap = 8 }, {
+                ui.button({
+                    text = if installing then installStep else "Install nnmxd",
+                    glyph = if installing then "loader" else "download",
+                    enabled = not installing,
+                    variant = "primary",
+                    onClick = install_nnmxd,
+                }),
+                ui.button({
+                    text = "Check again",
+                    glyph = "refresh",
+                    enabled = not installing,
+                    onClick = check_daemon,
+                }),
+            }))
+        end
+        if message ~= "" then
+            table.insert(setupContent, ui.label({ text = message, color = "on_surface_variant" }))
+        end
+        if installOutput ~= "" then
+            table.insert(setupContent, ui.scroll({ flexGrow = 1, gap = 4 }, {
+                ui.label({ text = installOutput, color = "on_surface_variant" }),
+            }))
+        end
+        panel.render(ui.column({ flexGrow = 1, gap = 14, padding = 18 }, setupContent))
+        return
+    end
+
+    local preset = selected_preset()
+    local deviceName = if status ~= nil and type(status.device) == "string" and status.device ~= ""
+        then status.device else "MX Master"
+    local serviceSummary = "Service unavailable"
+    local serviceGlyph = "circle-x"
+    local serviceColor = "error"
+    if serviceActive == true and status ~= nil and status.running == true then
+        serviceSummary = "Connected"
+        serviceGlyph = "circle-check"
+        serviceColor = "primary"
+    elseif serviceActive == true then
+        serviceSummary = "Starting"
+        serviceGlyph = "loader"
+        serviceColor = "primary"
+    end
+
+    local navItems = {
+        { "overview", "Overview", "layout-dashboard" },
+        { "gestures", "Gestures", "arrows-move" },
+        { "apps", "Applications", "apps" },
+        { "device", "Device", "settings" },
+        { "logs", "Logs", "terminal-2" },
+    }
+    local navigation = {}
+    for _, item in ipairs(navItems) do
+        local page = item[1]
+        table.insert(navigation, ui.button({
+            key = "page-" .. page,
+            text = item[2],
+            glyph = item[3],
+            selected = activePage == page,
+            onClick = function()
+                activePage = page
+                if page == "logs" then
+                    start_log_stream()
+                end
+                render()
+            end,
+        }))
+    end
+
+    local pageContent = {}
+    if activePage == "overview" then
+        local hero = ui.column({ flexGrow = 1, gap = 10, padding = 18, fill = "surface_container", radius = 16 }, {
+            ui.row({ align = "center", gap = 8 }, {
+                ui.glyph({ name = serviceGlyph, size = 18, color = serviceColor }),
+                ui.label({ text = serviceSummary, color = serviceColor, fontWeight = "semibold" }),
+            }),
+            ui.label({ text = deviceName, fontSize = 18, fontWeight = "bold", maxLines = 1 }),
+            ui.label({
+                text = if status ~= nil and status.appId ~= nil
+                    then `Active profile: {status.presetName or "Default"} · {status.appId}`
+                    else `Default profile: {preset.name}`,
+                color = "on_surface_variant",
+                maxLines = 2,
+            }),
+            ui.row({ gap = 8 }, {
+                ui.button({ text = "Refresh windows", glyph = "refresh", onClick = refresh_windows }),
+                ui.button({ text = "Restart service", glyph = "refresh", onClick = restart_service }),
+            }),
+        })
+        local pluginPath = noctalia.pluginDir()
+        if type(pluginPath) == "string" and pluginPath ~= ""
+            and noctalia.fileExists(pluginPath .. "/mouse-map.svg")
+        then
+            table.insert(pageContent, ui.row({ align = "center", gap = 12 }, {
+                ui.image({
+                    path = pluginPath .. "/mouse-map.svg",
+                    width = 148,
+                    height = 148,
+                    fit = "contain",
+                }),
+                hero,
+            }))
+        else
+            table.insert(pageContent, hero)
+        end
+
+        local profileButtons = {}
+        for _, item in ipairs(config.presets) do
+            local profileId = item.id
+            table.insert(profileButtons, ui.button({
+                key = "overview-profile-" .. profileId,
+                text = item.name,
+                glyph = if item.mode == "gesture" then "arrows-move" else "keyboard",
+                selected = selectedPresetId == profileId,
+                onClick = function()
+                    selectedPresetId = profileId
+                    activePage = "gestures"
+                    render()
+                end,
+            }))
+        end
+        table.insert(profileButtons, ui.button({
+            text = "New profile",
+            glyph = "plus",
+            onClick = function()
+                add_preset()
+                activePage = "gestures"
+                render()
+            end,
+        }))
+        local profileCardChildren = {
+            ui.row({ align = "center", justify = "space_between" }, {
+                ui.column({ flexGrow = 1, gap = 2 }, {
+                    ui.label({ text = "Profiles", fontSize = 16, fontWeight = "bold" }),
+                    ui.label({ text = "Choose how the thumb button behaves.", color = "on_surface_variant" }),
+                }),
+                ui.button({
+                    text = "Manage",
+                    glyph = "arrow-right",
+                    onClick = function()
+                        activePage = "gestures"
+                        render()
+                    end,
+                }),
+            }),
+        }
+        for _, row in ipairs(button_rows(profileButtons, 3)) do
+            table.insert(profileCardChildren, row)
+        end
+        table.insert(pageContent, ui.column({ gap = 10, padding = 16, fill = "surface_container", radius = 14 }, profileCardChildren))
+
+        local appCount = 0
+        local seenApps = {}
+        for _, window in ipairs(windows) do
+            if type(window) == "table" and type(window.app_id) == "string" and window.app_id ~= ""
+                and not seenApps[window.app_id]
+            then
+                appCount += 1
+                seenApps[window.app_id] = true
+            end
+        end
+        table.insert(pageContent, ui.row({
+            align = "center",
+            justify = "space_between",
+            gap = 12,
+            padding = 14,
+            fill = "surface_container",
+            radius = 14,
+        }, {
+            ui.column({ flexGrow = 1, gap = 2 }, {
+                ui.label({ text = "App-specific behavior", fontWeight = "bold" }),
+                ui.label({
+                    text = if appCount == 0 then "Assign profiles to individual Niri apps." else `{appCount} apps detected · profiles match exact app ID`,
+                    color = "on_surface_variant",
+                }),
+            }),
+            ui.button({
+                text = "Configure",
+                glyph = "arrow-right",
+                onClick = function()
+                    activePage = "apps"
+                    refresh_windows()
+                    render()
+                end,
+            }),
+        }))
+    elseif activePage == "gestures" then
+        local profileButtons = {}
+        for _, item in ipairs(config.presets) do
+            local profileId = item.id
+            table.insert(profileButtons, ui.button({
+                key = "gesture-profile-" .. profileId,
+                text = item.name,
+                selected = selectedPresetId == profileId,
+                onClick = function()
+                    selectedPresetId = profileId
+                    render()
+                end,
+            }))
+        end
+        table.insert(profileButtons, ui.button({
+            text = "Add profile",
+            glyph = "plus",
+            onClick = add_preset,
+        }))
+        local profileCardChildren = {
+            ui.label({ text = "Gesture profiles", fontSize = 16, fontWeight = "bold" }),
+        }
+        for _, row in ipairs(button_rows(profileButtons, 3)) do
+            table.insert(profileCardChildren, row)
+        end
+        table.insert(pageContent, ui.column({ gap = 10, padding = 14, fill = "surface_container", radius = 14 }, profileCardChildren))
+        table.insert(pageContent, preset_editor(preset))
+    elseif activePage == "apps" then
+        local appRows = {}
+        local seenApps = {}
+        for _, window in ipairs(windows) do
+            if type(window) == "table" and type(window.app_id) == "string" and window.app_id ~= ""
+                and not seenApps[window.app_id]
+            then
+                seenApps[window.app_id] = true
+                local appId = window.app_id
+                local currentID = config.appPresets[appId]
+                local title = type(window.title) == "string" and window.title or "Window"
+                local presetOptions = { "Default profile" }
+                local selectedIndex = 0
+                for profileIndex, item in ipairs(config.presets) do
+                    table.insert(presetOptions, item.name)
+                    if item.id == currentID then
+                        selectedIndex = profileIndex
+                    end
+                end
+                table.insert(appRows, ui.row({
+                    key = "app-" .. appId,
+                    align = "center",
+                    gap = 12,
+                    padding = 12,
+                    fill = "surface_container",
+                    radius = 12,
+                }, {
+                    ui.label({ text = "▣", color = "primary", fontSize = 20 }),
+                    ui.column({ flexGrow = 1, gap = 3 }, {
+                        ui.label({ text = appId, fontWeight = "semibold", maxLines = 1 }),
+                        ui.label({ text = title, color = "on_surface_variant", maxLines = 1 }),
+                    }),
+                    ui.select({
+                        options = presetOptions,
+                        selectedIndex = selectedIndex,
+                        width = 168,
+                        onChange = function(value)
+                            local selected = tonumber(value)
+                            if selected == nil or selected < 0 or selected > #config.presets then
+                                message = `Could not select a profile for {appId}.`
+                                render()
+                                return
+                            end
+                            config.appPresets[appId] = if selected == 0
+                                then nil
+                                else config.presets[selected].id
+                            message = `Profile for {appId} changed. Save to apply.`
+                            render()
+                        end,
+                    }),
+                }))
+            end
+        end
+        if #appRows == 0 then
+            table.insert(appRows, ui.column({ gap = 8, padding = 18, fill = "surface_container", radius = 14 }, {
+                ui.label({ text = "No windows found", fontSize = 16, fontWeight = "bold" }),
+                ui.label({
+                    text = "Open a few Niri windows, then refresh to assign profiles by app ID.",
+                    color = "on_surface_variant",
+                }),
+            }))
+        end
+        table.insert(pageContent, ui.row({ align = "center", justify = "space_between", gap = 8 }, {
+            ui.column({ flexGrow = 1, gap = 2 }, {
+                ui.label({ text = "Application profiles", fontSize = 16, fontWeight = "bold" }),
+                ui.label({ text = "Each app uses its assigned profile or the default.", color = "on_surface_variant" }),
+            }),
+            ui.button({ text = "Refresh", glyph = "refresh", onClick = refresh_windows }),
+        }))
+        for _, row in ipairs(appRows) do
+            table.insert(pageContent, row)
+        end
+    elseif activePage == "device" then
+        table.insert(pageContent, ui.column({ gap = 12, padding = 16, fill = "surface_container", radius = 14 }, {
+            ui.column({ gap = 3 }, {
+                ui.label({ text = "Input device", fontSize = 16, fontWeight = "bold" }),
+                ui.label({ text = "Choose how nnmxd connects to your mouse.", color = "on_surface_variant" }),
+            }),
+            ui.row({ align = "center", gap = 8 }, {
+                ui.button({
+                    text = if config.device.autoDetect then "Automatic detection" else "Manual device",
+                    glyph = "mouse",
+                    selected = config.device.autoDetect,
+                    onClick = function()
+                        config.device.autoDetect = not config.device.autoDetect
+                        render()
+                    end,
+                }),
+                ui.label({
+                    text = if config.device.autoDetect then "Logitech device detected automatically" else "Using a specific event device",
+                    color = "on_surface_variant",
+                }),
+            }),
+            ui.column({ gap = 4 }, {
+                ui.label({ text = "Device path", fontWeight = "medium" }),
+                ui.input({
+                    key = "device-path",
+                    value = config.device.path or "",
+                    placeholder = "/dev/input/eventN",
+                    onChange = function(value)
+                        config.device.path = value
+                    end,
+                }),
+                ui.label({ text = "Leave empty to use automatic device discovery.", color = "on_surface_variant" }),
+            }),
+            ui.column({ gap = 4 }, {
+                ui.label({ text = "Gesture button", fontWeight = "medium" }),
+                ui.input({
+                    key = "trigger-button",
+                    value = config.device.triggerButton,
+                    placeholder = "BTN_FORWARD",
+                    onChange = function(value)
+                        config.device.triggerButton = value
+                    end,
+                }),
+                ui.label({ text = "Save settings before redetecting. Redetect restarts nnmxd and scans for an accessible Logitech device.", color = "on_surface_variant" }),
+            }),
+        }))
+
+        table.insert(pageContent, ui.row({
+            align = "center",
+            justify = "space_between",
+            gap = 8,
+            padding = 14,
+            fill = "surface_container",
+            radius = 14,
+        }, {
+            ui.column({ flexGrow = 1, gap = 2 }, {
+                ui.label({ text = "nnmxd service", fontWeight = "semibold" }),
+                ui.label({ text = serviceSummary, color = serviceColor }),
+            }),
+            ui.button({
+                text = "Redetect",
+                glyph = "refresh",
+                onClick = function()
+                    restart_service("Redetected input device.")
+                end,
+            }),
+        }))
+    else
+        table.insert(pageContent, ui.row({
+            align = "center",
+            justify = "space_between",
+            gap = 8,
+            padding = 14,
+            fill = "surface_container",
+            radius = 14,
+        }, {
+            ui.column({ flexGrow = 1, gap = 2 }, {
+                ui.label({ text = "nnmxd live logs", fontSize = 16, fontWeight = "bold" }),
+                ui.label({
+                    text = if logStreamError ~= nil then logStreamError
+                        else if logStreamStarted then "Following the user journal · newest entries appear first"
+                        else "Starting journal stream…",
+                    color = if logStreamError ~= nil then "error" else "on_surface_variant",
+                }),
+            }),
+        }))
+
+        if #logLines == 0 then
+            table.insert(pageContent, ui.column({ gap = 8, padding = 18, fill = "surface_container", radius = 14 }, {
+                ui.label({ text = "Waiting for nnmxd output", fontWeight = "semibold" }),
+                ui.label({
+                    text = "Journal entries from nnmxd.service will appear here as they are written.",
+                    color = "on_surface_variant",
+                }),
+            }))
+        else
+            local renderedLines = {}
+            for index = #logLines, 1, -1 do
+                table.insert(renderedLines, ui.label({
+                    key = `log-line-{index}-{logLines[index]}`,
+                    text = logLines[index],
+                    color = "on_surface",
+                    fontFamily = "monospace",
+                    maxLines = 4,
+                }))
+            end
+            table.insert(pageContent, ui.scroll({ flexGrow = 1, gap = 4, padding = 12, fill = "surface_container", radius = 14 }, renderedLines))
+        end
+    end
+
+    local footerChildren = {
+        ui.label({
+            text = if message ~= "" then message else "Apply changes to update nnmxd.",
+            color = if string.find(message, "Could not") or string.find(message, "failed") then "error" else "on_surface_variant",
+            flexGrow = 1,
+            maxLines = 2,
+        }),
+    }
+    if status ~= nil and type(status.lastError) == "string" and status.lastError ~= "" then
+        table.insert(footerChildren, ui.label({ text = status.lastError, color = "error", maxLines = 2 }))
+    end
+    table.insert(footerChildren, ui.button({
+        text = if saving then "Saving..." else "Save changes",
+        glyph = "device-floppy",
+        enabled = not saving,
+        variant = "primary",
+        onClick = save_config,
+    }))
+
+    local content = {
+        ui.row({ align = "center", gap = 10 }, {
+            ui.label({ text = "MX", fontSize = 22, fontWeight = "bold", color = "primary" }),
+            ui.column({ flexGrow = 1, gap = 1 }, {
+                ui.label({ text = "MX Mouse", fontSize = 22, fontWeight = "bold" }),
+                ui.label({ text = "Niri controls for your MX Master", color = "on_surface_variant" }),
+            }),
+            ui.row({ align = "center", gap = 6, padding = 8, fill = "surface_container", radius = 20 }, {
+                ui.glyph({ name = serviceGlyph, size = 16, color = serviceColor }),
+                ui.label({ text = serviceSummary, color = serviceColor, fontWeight = "medium" }),
+            }),
+        }),
+        ui.row({ gap = 6 }, navigation),
+        ui.scroll({ flexGrow = 1, gap = 12 }, pageContent),
+        ui.row({ align = "center", gap = 10, padding = 8, fill = "surface_container", radius = 12 }, footerChildren),
+    }
+    panel.render(ui.column({ flexGrow = 1, gap = 12, padding = 14 }, content))
+end
+
+function onOpen(_context)
+    message = ""
+    panel.setWantsSecondTicks(true)
+    load_config()
+    load_status()
+    if activePage == "logs" then
+        start_log_stream()
+    end
+    render()
+    load_action_options()
+    check_daemon()
+    refresh_windows()
+end
+
+function update()
+    poll_service_status()
+end
+
+function onClose()
+end
+
+function onKey(chord, pressed)
+    if chord == "Escape" and pressed == "true" then
+        panel.close()
+    end
+end

@@ -1,0 +1,12 @@
+{
+  "settings": {
+    "bar_names": {
+      "label": "Target bars",
+      "description": "Bars to manage. Leave empty to follow Noctalia's configured bar order, or specify one or more names."
+    },
+    "toggle_zen": {
+      "label": "Toggle zen",
+      "description": "Keep the widget visible and let it toggle the focused window into or out of Zen Mode."
+    }
+  }
+}

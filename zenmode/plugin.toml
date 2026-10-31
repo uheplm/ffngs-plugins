@@ -1,0 +1,32 @@
+id = "ffngs/zenmode"
+name = "Zen Mode"
+version = "1.0.8"
+plugin_api = 43
+author = "ffngs"
+license = "MIT"
+icon = "focus"
+description = "Hide the Noctalia bar only while a zen-modded window is focused."
+dependencies = ["niri", "bash"]
+tags = ["niri", "utility", "bar"]
+
+[[setting]]
+key = "bar_names"
+type = "string_list"
+label_key = "settings.bar_names.label"
+description_key = "settings.bar_names.description"
+default = []
+
+[[widget]]
+id = "zen"
+entry = "widget.luau"
+
+  [[widget.setting]]
+  key = "toggle_zen"
+  type = "bool"
+  label_key = "settings.toggle_zen.label"
+  description_key = "settings.toggle_zen.description"
+  default = false
+
+[[service]]
+id = "service"
+entry = "service.luau"

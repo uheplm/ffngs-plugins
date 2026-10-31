@@ -11,8 +11,8 @@
 [[plugin]]
 id = "ffngs/npad"
 name = "npad"
-version = "1.0.23"
-updated_at = 1793406828
+version = "1.0.24"
+updated_at = 1793413507
 added_at = 1793406828
 author = "ffngs"
 license = "MIT"
@@ -20,3 +20,29 @@ icon = "app-window-filled"
 description = "Manage dynamic niri-scratchpad windows from a Noctalia panel."
 plugin_api = 43
 tags = ["panel", "productivity", "niri", "utility"]
+
+[[plugin]]
+id = "ffngs/zenmode"
+name = "Zen Mode"
+version = "1.0.8"
+updated_at = 1793417403
+added_at = 1793417403
+author = "ffngs"
+license = "MIT"
+icon = "focus"
+description = "Hide the Noctalia bar only while a zen-modded window is focused."
+plugin_api = 43
+tags = ["niri", "utility", "bar"]
+
+[[plugin]]
+id = "ffngs/mxmouse"
+name = "MX Mouse"
+version = "1.0.10"
+updated_at = 1793423690
+added_at = 1793423690
+author = "ffngs"
+license = "MIT"
+icon = "mouse"
+description = "Configure MX Master gestures and per-window presets for Niri."
+plugin_api = 43
+tags = ["niri", "utility", "panel", "bar"]
