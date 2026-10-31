@@ -1,13 +1,45 @@
 id = "ffngs/npad"
-name = "Npad"
-version = "1.0.7"
+name = "npad"
+version = "1.0.24"
 plugin_api = 43
 author = "ffngs"
 license = "MIT"
-icon = "layers"
+icon = "app-window-filled"
 description = "Manage dynamic niri-scratchpad windows from a Noctalia panel."
-dependencies = ["nscratch", "niri", "sleep"]
+dependencies = ["nscratch", "niri", "sleep", "bash", "python3"]
 tags = ["panel", "productivity", "niri", "utility"]
+
+[[setting]]
+key = "scratch_workspace"
+type = "string"
+label_key = "settings.scratch_workspace.label"
+description_key = "settings.scratch_workspace.description"
+default = "scratch"
+
+[[setting]]
+key = "prevent_selecting_scratch"
+type = "bool"
+label_key = "settings.prevent_selecting_scratch.label"
+description_key = "settings.prevent_selecting_scratch.description"
+default = false
+
+[[setting]]
+key = "niri_config_path"
+type = "string"
+label_key = "settings.niri_config_path.label"
+description_key = "settings.niri_config_path.description"
+default = ""
+
+[[widget]]
+id = "hidden"
+entry = "hidden.luau"
+
+  [[widget.setting]]
+  key = "hide_when_zero"
+  type = "bool"
+  label_key = "settings.hide_when_zero.label"
+  description_key = "settings.hide_when_zero.description"
+  default = true
 
 [[panel]]
 id = "manager"
@@ -16,3 +48,8 @@ width = 680
 height = 520
 placement = "floating"
 position = "center"
+capture_keys = ["Escape"]
+
+[[service]]
+id = "config-manager"
+entry = "config-manager.luau"

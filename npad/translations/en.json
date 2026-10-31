@@ -1,1 +1,20 @@
-{}
+{
+  "settings": {
+    "hide_when_zero": {
+      "label": "Hide when zero",
+      "description": "Hide the bar widget when there are no hidden windows from the current workspace."
+    },
+    "scratch_workspace": {
+      "label": "Scratchpad workspace name",
+      "description": "Name of the Niri workspace used to hide scratchpad windows."
+    },
+    "prevent_selecting_scratch": {
+      "label": "Prevent selecting scratch",
+      "description": "Wrap existing Niri workspace-up/down keybindings so they skip the scratchpad workspace. The panel header provides an Open Scratch button while enabled."
+    },
+    "niri_config_path": {
+      "label": "Niri config file",
+      "description": "Exact Niri config.kdl path to manage. Leave blank to use NIRI_CONFIG or the default ~/.config/niri/config.kdl."
+    }
+  }
+}

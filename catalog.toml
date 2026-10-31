@@ -10,13 +10,13 @@
 
 [[plugin]]
 id = "ffngs/npad"
-name = "Npad"
-version = "1.0.7"
-updated_at = 1793406792
-added_at = 1793406792
+name = "npad"
+version = "1.0.23"
+updated_at = 1793406828
+added_at = 1793406828
 author = "ffngs"
 license = "MIT"
-icon = "layers"
+icon = "app-window-filled"
 description = "Manage dynamic niri-scratchpad windows from a Noctalia panel."
 plugin_api = 43
 tags = ["panel", "productivity", "niri", "utility"]
