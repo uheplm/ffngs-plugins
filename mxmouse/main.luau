@@ -1024,8 +1024,14 @@ render = function()
     end
 
     local preset = selected_preset()
-    local deviceName = if status ~= nil and type(status.device) == "string" and status.device ~= ""
-        then status.device else "MX Master"
+    local noMouseDetected = serviceActive == true
+        and status ~= nil
+        and status.running ~= true
+        and type(status.lastError) == "string"
+        and string.find(string.lower(status.lastError), "no logitech mouse", 1, true) ~= nil
+    local deviceName = if noMouseDetected then "No compatible MX mouse connected"
+        else if status ~= nil and type(status.device) == "string" and status.device ~= ""
+            then status.device else "MX Master"
     local serviceSummary = "Service unavailable"
     local serviceGlyph = "circle-x"
     local serviceColor = "error"
@@ -1033,8 +1039,10 @@ render = function()
         serviceSummary = "Connected"
         serviceGlyph = "circle-check"
         serviceColor = "primary"
+    elseif noMouseDetected then
+        serviceSummary = "No MX mouse connected"
     elseif serviceActive == true then
-        serviceSummary = "Starting"
+        serviceSummary = "Waiting for device"
         serviceGlyph = "loader"
         serviceColor = "primary"
     end
@@ -1081,7 +1089,12 @@ render = function()
             }),
             ui.row({ gap = 8 }, {
                 ui.button({ text = "Refresh windows", glyph = "refresh", onClick = refresh_windows }),
-                ui.button({ text = "Restart service", glyph = "refresh", onClick = restart_service }),
+                ui.button({
+                    text = "Restart service",
+                    glyph = "refresh",
+                    enabled = not noMouseDetected,
+                    onClick = restart_service,
+                }),
             }),
         })
         local pluginPath = noctalia.pluginDir()
@@ -1323,7 +1336,7 @@ render = function()
                         config.device.triggerButton = value
                     end,
                 }),
-                ui.label({ text = "Save settings before redetecting. Redetect restarts nnmxd and scans for an accessible Logitech device.", color = "on_surface_variant" }),
+                ui.label({ text = "Save settings before retrying. Redetect manually restarts nnmxd and scans for an accessible Logitech device; the panel does not automatically restart the service when no mouse is found.", color = "on_surface_variant" }),
             }),
         }))
 
@@ -1340,10 +1353,10 @@ render = function()
                 ui.label({ text = serviceSummary, color = serviceColor }),
             }),
             ui.button({
-                text = "Redetect",
+                text = if noMouseDetected then "Retry detection" else "Redetect",
                 glyph = "refresh",
                 onClick = function()
-                    restart_service("Redetected input device.")
+                    restart_service(if noMouseDetected then "Retried MX mouse detection." else "Redetected input device.")
                 end,
             }),
         }))

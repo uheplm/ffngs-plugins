@@ -1,12 +1,12 @@
 id = "ffngs/googlehome"
 name = "Google Home"
-version = "1.0.13"
+version = "1.0.33"
 plugin_api = 43
 author = "ffngs"
 license = "MIT"
 icon = "brand-google-home"
-description = "Control playback and cast media to Google Home Mini speakers."
-dependencies = ["catt"]
+description = "Control Google Home speaker playback and volume."
+dependencies = ["catt", "python3"]
 tags = ["audio", "media", "panel", "utility"]
 
 [[setting]]
@@ -14,19 +14,30 @@ key = "poll_interval"
 type = "int"
 label_key = "settings.poll_interval.label"
 description_key = "settings.poll_interval.description"
-default = 5
+default = 2
 min = 1
 max = 60
 
 [[panel]]
 id = "remote"
 entry = "main.luau"
-width = 700
-height = 760
+width = 440
+height = 275
 placement = "floating"
 position = "center"
 capture_keys = ["Escape"]
 
+[[launcher_provider]]
+id = "connect"
+entry = "provider.luau"
+prefix = "gh"
+glyph = "brand-google-home"
+include_in_global_search = false
+
 [[widget]]
 id = "mini-player"
 entry = "widget.luau"
+
+[[service]]
+id = "cast-status"
+entry = "service.luau"
