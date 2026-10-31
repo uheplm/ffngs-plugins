@@ -1,4 +1,4 @@
-# Niri Scratchpad Manager
+# Npad
 
 Manage dynamic windows created by [`niri-scratchpad`](https://github.com/Vizkid04/niri-scratchpad) from a Noctalia panel. Browse marked windows and add windows from the focused workspace to the dynamic scratchpad.
 
@@ -6,7 +6,7 @@ Manage dynamic windows created by [`niri-scratchpad`](https://github.com/Vizkid0
 
 | Field | Value |
 | --- | --- |
-| ID | `ffngs/nscratch` |
+| ID | `ffngs/npad` |
 | Entries | Panel: `manager` |
 
 ## Requirements
@@ -18,7 +18,7 @@ Install `nscratch` from [niri-scratchpad](https://github.com/Vizkid04/niri-scrat
 Open the panel with:
 
 ```sh
-noctalia msg panel-toggle ffngs/nscratch:manager
+noctalia msg panel-toggle ffngs/npad:manager
 ```
 
 The **Marked** section lists dynamic scratchpads from `nscratch` state. Each row has a context-aware **Hide** or **Restore** action and a **Remove** action. Hidden rows use muted text and a monochrome window icon. Buttons include icons for their actions. The **Workspace** section lists windows on the focused workspace that are not in the dynamic marked list. Click **Mark** to briefly close the panel, focus that specific window in Niri, run `nscratch --mark`, and reopen the panel with the updated lists.

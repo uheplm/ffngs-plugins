@@ -1,6 +1,6 @@
 --!nonstrict
 
-local PANEL_ID = "ffngs/nscratch:manager"
+local PANEL_ID = "ffngs/npad:manager"
 local scratchpads = {}
 local windowStates = {}
 local workspaceWindows = {}
@@ -170,7 +170,7 @@ local function render()
 
     panel.render(ui.column({ flexGrow = 1, gap = 10 }, {
         ui.row({ align = "center", justify = "space_between", gap = 8 }, {
-            ui.label({ text = "Niri Scratchpads", fontSize = 22, fontWeight = "bold", flexGrow = 1 }),
+            ui.label({ text = "Npad", fontSize = 22, fontWeight = "bold", flexGrow = 1 }),
             ui.button({ text = "Refresh", glyph = "refresh-cw", onClick = refresh_scratchpads }),
         }),
         ui.scroll({ flexGrow = 1, gap = 6 }, content),
@@ -180,13 +180,13 @@ end
 local function reopen_panel_after_delay()
     local started = noctalia.runAsync({ "sleep", "0.25" }, function(result)
         if result.timedOut or result.exitCode ~= 0 then
-            noctalia.notifyError("Niri Scratchpad Manager", "Could not wait before reopening the panel.")
+            noctalia.notifyError("Npad", "Could not wait before reopening the panel.")
         end
         noctalia.togglePanel(PANEL_ID)
     end, 2000)
 
     if not started then
-        noctalia.notifyError("Niri Scratchpad Manager", "Could not start the panel reopen delay.")
+        noctalia.notifyError("Npad", "Could not start the panel reopen delay.")
         noctalia.togglePanel(PANEL_ID)
     end
 end
@@ -202,14 +202,14 @@ local function focus_and_mark_window(windowId)
     }, function(focusResult)
         if focusResult.timedOut or focusResult.exitCode ~= 0 then
             local detail = focusResult.stderr ~= "" and focusResult.stderr or `exit status {focusResult.exitCode}`
-            noctalia.notifyError("Niri Scratchpad Manager", `Could not focus the selected window: {detail}`)
+            noctalia.notifyError("Npad", `Could not focus the selected window: {detail}`)
             reopen_panel_after_delay()
             return
         end
 
         local started = noctalia.runAsync({ "sleep", "0.1" }, function(delayResult)
             if delayResult.timedOut or delayResult.exitCode ~= 0 then
-                noctalia.notifyError("Niri Scratchpad Manager", "Could not wait for Niri to focus the selected window.")
+                noctalia.notifyError("Npad", "Could not wait for Niri to focus the selected window.")
                 reopen_panel_after_delay()
                 return
             end
@@ -218,13 +218,13 @@ local function focus_and_mark_window(windowId)
         end, 2000)
 
         if not started then
-            noctalia.notifyError("Niri Scratchpad Manager", "Could not start the focus settling delay.")
+            noctalia.notifyError("Npad", "Could not start the focus settling delay.")
             reopen_panel_after_delay()
         end
     end, 5000)
 
     if not focusStarted then
-        noctalia.notifyError("Niri Scratchpad Manager", "Could not start niri to focus the selected window.")
+        noctalia.notifyError("Npad", "Could not start niri to focus the selected window.")
         reopen_panel_after_delay()
     end
 end
@@ -234,7 +234,7 @@ function mark_workspace_window(windowId)
 
     local started = noctalia.runAsync({ "sleep", "0.25" }, function(result)
         if result.timedOut or result.exitCode ~= 0 then
-            noctalia.notifyError("Niri Scratchpad Manager", "Could not wait for the panel to close.")
+            noctalia.notifyError("Npad", "Could not wait for the panel to close.")
             reopen_panel_after_delay()
             return
         end
@@ -243,7 +243,7 @@ function mark_workspace_window(windowId)
     end, 2000)
 
     if not started then
-        noctalia.notifyError("Niri Scratchpad Manager", "Could not start the panel close delay.")
+        noctalia.notifyError("Npad", "Could not start the panel close delay.")
         noctalia.togglePanel(PANEL_ID)
     end
 end
@@ -414,7 +414,7 @@ function hide_scratchpad(windowId)
         if result.timedOut or result.exitCode ~= 0 then
             local detail = result.stderr ~= "" and result.stderr or `exit status {result.exitCode}`
             status = `Could not hide scratchpad: {detail}`
-            noctalia.notifyError("Niri Scratchpad Manager", status)
+            noctalia.notifyError("Npad", status)
             render()
             return
         end
@@ -425,7 +425,7 @@ function hide_scratchpad(windowId)
 
     if not started then
         status = "Could not start niri. Check that it is installed and available on PATH."
-        noctalia.notifyError("Niri Scratchpad Manager", status)
+        noctalia.notifyError("Npad", status)
         render()
     end
 end
@@ -450,7 +450,7 @@ function run_nscratch(arguments, successMessage, onComplete)
 
         if result.timedOut then
             status = `nscratch timed out: {detail}`
-            noctalia.notifyError("Niri Scratchpad Manager", status)
+            noctalia.notifyError("Npad", status)
         elseif result.exitCode ~= 0 then
             status = `nscratch failed: {detail}`
             if result.exitCode == 1 then
@@ -458,7 +458,7 @@ function run_nscratch(arguments, successMessage, onComplete)
                     status ..= "\nThe scratchpad entry may be stale. Refresh the list and try again."
                 end
             end
-            noctalia.notifyError("Niri Scratchpad Manager", status)
+            noctalia.notifyError("Npad", status)
         else
             status = successMessage
             refresh_scratchpads()
@@ -475,7 +475,7 @@ function run_nscratch(arguments, successMessage, onComplete)
 
     if not started then
         status = "Could not start nscratch. Check that it is installed and on PATH."
-        noctalia.notifyError("Niri Scratchpad Manager", status)
+        noctalia.notifyError("Npad", status)
         render()
         if onComplete then
             onComplete()

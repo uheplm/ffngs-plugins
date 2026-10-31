@@ -9,11 +9,11 @@
 # On every row, updated_at dates the commit that first shipped that row's version.
 
 [[plugin]]
-id = "ffngs/nscratch"
-name = "Niri Scratchpad Manager"
-version = "1.0.6"
-updated_at = 1793406477
-added_at = 1793406477
+id = "ffngs/npad"
+name = "Npad"
+version = "1.0.7"
+updated_at = 1793406792
+added_at = 1793406792
 author = "ffngs"
 license = "MIT"
 icon = "layers"
