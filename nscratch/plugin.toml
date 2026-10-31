@@ -1,0 +1,18 @@
+id = "ffngs/nscratch"
+name = "Niri Scratchpad Manager"
+version = "1.0.6"
+plugin_api = 43
+author = "ffngs"
+license = "MIT"
+icon = "layers"
+description = "Manage dynamic niri-scratchpad windows from a Noctalia panel."
+dependencies = ["nscratch", "niri", "sleep"]
+tags = ["panel", "productivity", "niri", "utility"]
+
+[[panel]]
+id = "manager"
+entry = "main.luau"
+width = 680
+height = 520
+placement = "floating"
+position = "center"

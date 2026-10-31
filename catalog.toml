@@ -1,0 +1,22 @@
+# This file is auto-generated. Do not edit manually.
+# Do not include it in your commit.
+# Noctalia plugins catalog.
+# Index of every plugin this source ships: the minimum needed to render, search,
+# and compat-check the list. The per-plugin plugin.toml stays authoritative; the
+# host re-reads it on enable. Keep one [[plugin]] row per plugin subdirectory.
+# A [[plugin.release]] row names an older revision for a Noctalia below the tip's
+# plugin_api, so an older release stays installable instead of the plugin vanishing.
+# On every row, updated_at dates the commit that first shipped that row's version.
+
+[[plugin]]
+id = "ffngs/nscratch"
+name = "Niri Scratchpad Manager"
+version = "1.0.6"
+updated_at = 1793406477
+added_at = 1793406477
+author = "ffngs"
+license = "MIT"
+icon = "layers"
+description = "Manage dynamic niri-scratchpad windows from a Noctalia panel."
+plugin_api = 43
+tags = ["panel", "productivity", "niri", "utility"]
