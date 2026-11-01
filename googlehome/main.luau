@@ -167,7 +167,7 @@ local function render()
         ui.label({
             key = "player-time",
             text = if duration > 0
-                then `{format_time(currentTime)} / {format_time(duration)} • {math.floor(math.clamp(currentTime / duration, 0, 1) * 100 + 0.5)}% • -{format_time(math.max(duration - currentTime, 0))}`
+                then `{format_time(currentTime)} / {format_time(duration)}`
                 else "--:-- / --:--",
             color = "on_surface_variant",
             textAlign = "end",

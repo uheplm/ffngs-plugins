@@ -17,7 +17,7 @@ Connect to a Cast speaker or group and use a compact Noctalia mini-player for li
 
 ## Usage
 
-Type `/gh` in the Noctalia launcher to discover Cast devices. Select a speaker, display, or group to connect. Each device result shows its IP address, device type, and connection/playback state alongside a device-type icon. The discovered device list and last selection are cached in Noctalia's per-plugin data directory. While connected, a **Disconnect** result appears at the top.
+Type `/gh` in the Noctalia launcher to discover Cast devices. Select a speaker, display, or group to connect. Each device result shows its IP address, device type, and connection/playback state alongside a device-type icon. The discovered device list and last selection are cached in Noctalia's per-plugin data directory. Use **Refresh devices** to rescan the network; a notification reports how many devices were found. While connected, **Disconnect** appears first and **Refresh devices** second.
 
 When connected, the **Google Home Mini Player** bar widget appears with the album cover, track title, and device-type icon. Hover tooltips show playback status on the cover, elapsed/total time on the title, and device name and volume on the device icon. Click the cover to toggle play/pause, right-click the widget to advance to the next track, or click elsewhere on the widget to open the compact floating player panel. The panel updates from Cast status events and shows the casting application, progress, elapsed/total and remaining time, percentage, current volume, and mute state. Video metadata such as series, season, and episode appears when provided by the Cast receiver. The panel also provides previous, play/pause, next, stop-and-dismiss, volume, and disconnect controls. Playback and listener errors are delivered as notifications rather than shown in the panel. Disconnecting stops the persistent Cast connection and hides the widget; the cached device list and last selected device are retained. Run `/gh` again to connect to another device.
 
@@ -31,7 +31,7 @@ noctalia msg panel-toggle ffngs/googlehome:remote
 
 | Setting | Default | Range | Description |
 | --- | ---: | ---: | --- |
-| Playback polling interval | 2 seconds | 1–60 seconds | Fallback status-check interval used in case a Cast event is missed. |
+| Playback polling interval | 1 seconds | 1–60 seconds | Fallback status-check interval used in case a Cast event is missed. |
 
 ## Notes
 

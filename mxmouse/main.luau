@@ -2,10 +2,14 @@
 
 local DEFAULTS = {
     version = 1,
+    applyGeneration = 0,
     device = {
         autoDetect = true,
         path = "",
         triggerButton = "BTN_FORWARD",
+        dpi = 0,
+        verticalScroll = 100,
+        horizontalScroll = 100,
     },
     defaultPresetId = "default",
     presets = {
@@ -13,8 +17,10 @@ local DEFAULTS = {
             id = "default",
             name = "Default",
             mode = "gesture",
+            glyph = "arrows-move",
             threshold = 100,
-            escalation = 250,
+            retriggerDistance = 100,
+            escalation = 0,
             metaKey = "KEY_LEFTMETA",
             bindings = {
                 left = { type = "niri", value = "focus-column-left" },
@@ -40,6 +46,9 @@ local serviceEnabled = nil
 local serviceActive = nil
 local windows = {}
 local selectedPresetId = "default"
+local deviceDPIInput = "0"
+local verticalScrollInput = "100"
+local horizontalScrollInput = "100"
 local message = ""
 local saving = false
 local installing = false
@@ -53,17 +62,27 @@ local logLines = {}
 local logStreamStarted = false
 local logStreamError = nil
 local servicePollInFlight = false
+local windowRefreshInFlight = false
+local windowListSignature = ""
+local lastFocusedWindow = nil
 local appIconPaths = {}
+local notifiedServiceError = ""
+local pendingConfigGeneration = nil
 local load_status
 local render
 
 local DAEMON_REPOSITORY = "https://github.com/uheplm/nnmxd.git"
 
 local function default_config()
-    return noctalia.json.decode(noctalia.json.encode(DEFAULTS))
+    local defaults = noctalia.json.decode(noctalia.json.encode(DEFAULTS))
+    deviceDPIInput = tostring(defaults.device.dpi)
+    verticalScrollInput = tostring(defaults.device.verticalScroll)
+    horizontalScrollInput = tostring(defaults.device.horizontalScroll)
+    return defaults
 end
 
-local function app_icon(appId)
+local function app_icon(appId, size)
+    local iconSize = size or 40
     local cached = appIconPaths[appId]
     if cached == nil then
         cached = { path = noctalia.appIconPath(appId, 40) }
@@ -72,14 +91,14 @@ local function app_icon(appId)
     if type(cached.path) == "string" then
         return ui.image({
             path = cached.path,
-            width = 40,
-            height = 40,
+            width = iconSize,
+            height = iconSize,
             fit = "contain",
         })
     end
     return ui.glyph({
         name = "window",
-        size = 28,
+        size = iconSize,
         color = "primary",
     })
 end
@@ -490,8 +509,11 @@ local function load_config()
             end
         end
         preset.mode = if preset.mode == "meta-toggle" then "meta-toggle" else "gesture"
+        preset.glyph = if type(preset.glyph) == "string" and preset.glyph ~= "" then preset.glyph else "arrows-move"
         preset.threshold = if type(preset.threshold) == "number" then preset.threshold else 100
-        preset.escalation = if type(preset.escalation) == "number" then preset.escalation else 250
+        preset.retriggerDistance = if type(preset.retriggerDistance) == "number" and preset.retriggerDistance > 0
+            then preset.retriggerDistance else preset.threshold
+        preset.escalation = if type(preset.escalation) == "number" then preset.escalation else 0
         preset.metaKey = if type(preset.metaKey) == "string" then preset.metaKey else "KEY_LEFTMETA"
     end
     if type(decoded.defaultPresetId) ~= "string" then
@@ -506,8 +528,54 @@ local function load_config()
     if type(decoded.device.triggerButton) ~= "string" or decoded.device.triggerButton == "" then
         decoded.device.triggerButton = "BTN_FORWARD"
     end
+    if type(decoded.device.dpi) ~= "number" then
+        decoded.device.dpi = 0
+    end
+    if type(decoded.device.verticalScroll) ~= "number" then
+        decoded.device.verticalScroll = 100
+    end
+    if type(decoded.device.horizontalScroll) ~= "number" then
+        decoded.device.horizontalScroll = 100
+    end
+    if type(decoded.applyGeneration) ~= "number"
+        or decoded.applyGeneration % 1 ~= 0
+        or decoded.applyGeneration < 0
+    then
+        decoded.applyGeneration = 0
+    end
+    deviceDPIInput = tostring(decoded.device.dpi)
+    verticalScrollInput = tostring(decoded.device.verticalScroll)
+    horizontalScrollInput = tostring(decoded.device.horizontalScroll)
     config = decoded
     selectedPresetId = config.defaultPresetId or config.presets[1].id
+end
+
+local function show_notification(body)
+    local started = noctalia.runAsync({
+        "noctalia",
+        "msg",
+        "notification-show",
+        "MX Mouse",
+        body,
+    }, function(result)
+        if result.timedOut or result.exitCode ~= 0 then
+            local detail = result.stderr ~= "" and result.stderr
+                or result.stdout ~= "" and result.stdout
+                or `exit status {result.exitCode}`
+            noctalia.notifyError("MX Mouse", `Could not show notification: {detail}`)
+        end
+    end, 5000)
+    if not started then
+        noctalia.notifyError("MX Mouse", "Could not start the notification command.")
+    end
+end
+
+local function is_niri_focus_error(serviceError)
+    return serviceError == "Niri reports no focused window"
+end
+
+local function is_dpi_error(serviceError)
+    return string.find(string.lower(serviceError), "dpi", 1, true) ~= nil
 end
 
 load_status = function()
@@ -523,31 +591,117 @@ load_status = function()
     local ok, decoded = pcall(noctalia.json.decode, contents)
     if ok and type(decoded) == "table" then
         status = decoded
+        if pendingConfigGeneration == nil
+            and type(config) == "table"
+            and type(config.applyGeneration) == "number"
+            and type(status.appliedGeneration) == "number"
+            and config.applyGeneration > status.appliedGeneration
+        then
+            pendingConfigGeneration = config.applyGeneration
+            message = "Configuration saved. Press the thumb button once to apply it; that press will not run its assigned action."
+        end
+        local justAppliedConfig = pendingConfigGeneration ~= nil
+            and type(status.appliedGeneration) == "number"
+            and status.appliedGeneration == pendingConfigGeneration
+        if justAppliedConfig then
+            pendingConfigGeneration = nil
+            message = "Configuration applied. The thumb-button press was used to apply it; its assigned action was skipped."
+            show_notification(message)
+        end
+        local serviceError = if type(status.lastError) == "string" then status.lastError else ""
+        if serviceError == "" then
+            notifiedServiceError = ""
+        elseif is_niri_focus_error(serviceError) then
+            notifiedServiceError = serviceError
+        elseif is_dpi_error(serviceError) then
+            if justAppliedConfig and serviceError ~= notifiedServiceError then
+                notifiedServiceError = serviceError
+                noctalia.notifyError("MX Mouse", serviceError)
+            end
+        elseif serviceError ~= notifiedServiceError then
+            notifiedServiceError = serviceError
+            noctalia.notifyError("MX Mouse", serviceError)
+        end
     else
         message = "Could not parse mxmouse service status."
     end
 end
 
 local function refresh_windows()
+    if windowRefreshInFlight then
+        return
+    end
+    windowRefreshInFlight = true
     local started = noctalia.runAsync({ "niri", "msg", "--json", "windows" }, function(result)
+        windowRefreshInFlight = false
+        local changed = false
         if result.timedOut or result.exitCode ~= 0 then
             local detail = result.stderr ~= "" and result.stderr
                 or result.stdout ~= "" and result.stdout
                 or `exit status {result.exitCode}`
             message = `Could not read Niri windows: {detail}`
+            changed = true
         else
             local ok, decoded = pcall(noctalia.json.decode, result.stdout)
             if not ok or type(decoded) ~= "table" then
                 message = "Could not parse Niri windows response."
+                changed = true
             else
+                local signatureRows = {}
+                local focusedWindow = nil
+                local fallbackWindow = nil
+                local fallbackFocusTimestamp = nil
+                local previousFocusedID = if lastFocusedWindow ~= nil then lastFocusedWindow.id else nil
+                for _, window in ipairs(decoded) do
+                    if type(window) == "table" then
+                        table.insert(signatureRows, {
+                            id = window.id,
+                            app_id = window.app_id,
+                            title = window.title,
+                            is_focused = window.is_focused,
+                        })
+                        if window.is_focused == true
+                            and type(window.app_id) == "string"
+                            and window.app_id ~= ""
+                        then
+                            focusedWindow = window
+                        end
+                        local timestamp = window.focus_timestamp
+                        if type(window.app_id) == "string" and window.app_id ~= ""
+                            and type(timestamp) == "table"
+                        then
+                            local secs = tonumber(timestamp.secs) or 0
+                            local nanos = tonumber(timestamp.nanos) or 0
+                            if fallbackFocusTimestamp == nil
+                                or secs > fallbackFocusTimestamp.secs
+                                or (secs == fallbackFocusTimestamp.secs and nanos > fallbackFocusTimestamp.nanos)
+                            then
+                                fallbackWindow = window
+                                fallbackFocusTimestamp = { secs = secs, nanos = nanos }
+                            end
+                        end
+                    end
+                end
+                local signature = noctalia.json.encode(signatureRows) or ""
+                changed = signature ~= windowListSignature
+                windowListSignature = signature
                 windows = decoded
+                focusedWindow = focusedWindow or fallbackWindow
+                if focusedWindow ~= nil then
+                    lastFocusedWindow = focusedWindow
+                    changed = changed or focusedWindow.id ~= previousFocusedID
+                end
             end
         end
         load_status()
-        render()
+        if changed then
+            render()
+        end
     end, 5000)
     if not started then
+        windowRefreshInFlight = false
         message = "Could not start Niri to list windows."
+        render()
     end
 end
 
@@ -555,6 +709,27 @@ local function save_config()
     if saving then
         return
     end
+    local dpi = tonumber(deviceDPIInput)
+    local verticalScroll = tonumber(verticalScrollInput)
+    local horizontalScroll = tonumber(horizontalScrollInput)
+    if dpi == nil or dpi % 1 ~= 0 or (dpi ~= 0 and (dpi < 100 or dpi > 16000)) then
+        message = "DPI must be 0 (unchanged) or a whole number from 100 to 16000."
+        render()
+        return
+    end
+    if verticalScroll == nil or verticalScroll % 1 ~= 0 or verticalScroll < 10 or verticalScroll > 500 then
+        message = "Vertical scroll scale must be a whole percentage from 10 to 500."
+        render()
+        return
+    end
+    if horizontalScroll == nil or horizontalScroll % 1 ~= 0 or horizontalScroll < 10 or horizontalScroll > 500 then
+        message = "Horizontal scroll scale must be a whole percentage from 10 to 500."
+        render()
+        return
+    end
+    config.device.dpi = dpi
+    config.device.verticalScroll = verticalScroll
+    config.device.horizontalScroll = horizontalScroll
     local dataDir, dirError = noctalia.pluginDataDir()
     if type(dataDir) ~= "string" or dataDir == "" then
         message = `Could not locate plugin data directory: {tostring(dirError)}`
@@ -562,6 +737,7 @@ local function save_config()
         return
     end
     CANDIDATE_PATH = dataDir .. "/candidate-config.json"
+    config.applyGeneration += 1
     local encoded, encodeError = noctalia.json.encode(config, true)
     if type(encoded) ~= "string" then
         message = `Could not encode configuration: {tostring(encodeError)}`
@@ -576,6 +752,7 @@ local function save_config()
     end
 
     saving = true
+    pendingConfigGeneration = config.applyGeneration
     message = "Validating and saving configuration..."
     render()
     local serviceCommand = "nnmxd"
@@ -586,18 +763,21 @@ local function save_config()
     local started = noctalia.runAsync({ serviceCommand, "--apply-config", CANDIDATE_PATH }, function(result)
         saving = false
         if result.timedOut or result.exitCode ~= 0 then
+            pendingConfigGeneration = nil
             local detail = result.stderr ~= "" and result.stderr
                 or result.stdout ~= "" and result.stdout
                 or `exit status {result.exitCode}`
             message = `Could not apply configuration: {detail}`
             noctalia.notifyError("MX Mouse", message)
         else
-            message = "Configuration saved. Preset changes apply on the next thumb-button press."
+            message = "Configuration saved. Press the thumb button once to apply; that press will not run its assigned action."
+            show_notification(message)
         end
         render()
     end, 10000)
     if not started then
         saving = false
+        pendingConfigGeneration = nil
         message = "Could not start nnmxd to validate configuration."
         noctalia.notifyError("MX Mouse", message)
         render()
@@ -658,8 +838,10 @@ local function add_preset()
         id = id,
         name = "New preset",
         mode = "gesture",
+        glyph = "arrows-move",
         threshold = 100,
-        escalation = 250,
+        retriggerDistance = 100,
+        escalation = 0,
         metaKey = "KEY_LEFTMETA",
         bindings = {
             left = { type = "niri", value = "focus-column-left" },
@@ -731,6 +913,20 @@ local function preset_editor(preset)
                 preset.name = value
             end,
         }),
+        ui.row({ align = "center", gap = 8 }, {
+            ui.glyph({ name = preset.glyph, size = 20, color = "primary" }),
+            ui.column({ flexGrow = 1, gap = 4 }, {
+                ui.label({ text = "Preset glyph" }),
+                ui.input({
+                    key = "preset-glyph-" .. preset.id,
+                    value = preset.glyph,
+                    placeholder = "e.g. arrows-move",
+                    onChange = function(value)
+                        preset.glyph = value
+                    end,
+                }),
+            }),
+        }),
         ui.row({ gap = 8 }, {
             ui.button({
                 text = "Gesture mode",
@@ -763,7 +959,7 @@ local function preset_editor(preset)
     if preset.mode == "gesture" then
         table.insert(children, ui.row({ gap = 8 }, {
             ui.column({ flexGrow = 1, gap = 4 }, {
-                ui.label({ text = "Movement threshold (device counts)" }),
+                ui.label({ text = "Initial movement threshold (device counts)" }),
                 ui.input({
                     key = "threshold-" .. preset.id,
                     value = tostring(preset.threshold),
@@ -776,18 +972,35 @@ local function preset_editor(preset)
                 }),
             }),
             ui.column({ flexGrow = 1, gap = 4 }, {
-                ui.label({ text = "Additional distance per gesture step" }),
+                ui.label({ text = "Retrigger distance (device counts)" }),
+                ui.input({
+                    key = "retrigger-distance-" .. preset.id,
+                    value = tostring(preset.retriggerDistance),
+                    onChange = function(value)
+                        local number = tonumber(value)
+                        if number ~= nil and math.floor(number) == number and number > 0 then
+                            preset.retriggerDistance = number
+                        end
+                    end,
+                }),
+            }),
+            ui.column({ flexGrow = 1, gap = 4 }, {
+                ui.label({ text = "Escalation per retrigger (device counts)" }),
                 ui.input({
                     key = "escalation-" .. preset.id,
                     value = tostring(preset.escalation),
                     onChange = function(value)
                         local number = tonumber(value)
-                        if number ~= nil and math.floor(number) == number then
+                        if number ~= nil and math.floor(number) == number and number >= 0 then
                             preset.escalation = number
                         end
                     end,
                 }),
             }),
+        }))
+        table.insert(children, ui.label({
+            text = "Threshold triggers the first directional action. Retrigger distance is the movement needed between later actions. Escalation adds to that distance after each retrigger; 0 keeps each retrigger the same distance. Retrigger distance defaults to the threshold.",
+            color = "on_surface_variant",
         }))
         table.insert(children, ui.label({
             text = "Select a direction or gesture below to edit its action. Shell commands run as your user.",
@@ -1074,19 +1287,37 @@ render = function()
 
     local pageContent = {}
     if activePage == "overview" then
+        local focusedAppContent
+        if lastFocusedWindow ~= nil and type(lastFocusedWindow.app_id) == "string" then
+            local appId = lastFocusedWindow.app_id
+            local activePresetId = config.appPresets[appId] or config.defaultPresetId
+            local activePreset = config.presets[1]
+            for _, item in ipairs(config.presets) do
+                if item.id == activePresetId then
+                    activePreset = item
+                    break
+                end
+            end
+            focusedAppContent = ui.row({ align = "center", gap = 5 }, {
+                ui.glyph({ name = activePreset.glyph or "arrows-move", size = 16, color = "primary" }),
+                ui.label({ text = `Active profile: {activePreset.name} ·`, color = "on_surface_variant", maxLines = 1 }),
+                app_icon(appId, 18),
+                ui.label({ text = appId, color = "on_surface_variant", maxLines = 1 }),
+            })
+        else
+            focusedAppContent = ui.label({
+                text = `Default profile: {preset.name}`,
+                color = "on_surface_variant",
+                maxLines = 2,
+            })
+        end
         local hero = ui.column({ flexGrow = 1, gap = 10, padding = 18, fill = "surface_container", radius = 16 }, {
             ui.row({ align = "center", gap = 8 }, {
                 ui.glyph({ name = serviceGlyph, size = 18, color = serviceColor }),
                 ui.label({ text = serviceSummary, color = serviceColor, fontWeight = "semibold" }),
             }),
             ui.label({ text = deviceName, fontSize = 18, fontWeight = "bold", maxLines = 1 }),
-            ui.label({
-                text = if status ~= nil and status.appId ~= nil
-                    then `Active profile: {status.presetName or "Default"} · {status.appId}`
-                    else `Default profile: {preset.name}`,
-                color = "on_surface_variant",
-                maxLines = 2,
-            }),
+            focusedAppContent,
             ui.row({ gap = 8 }, {
                 ui.button({ text = "Refresh windows", glyph = "refresh", onClick = refresh_windows }),
                 ui.button({
@@ -1120,7 +1351,7 @@ render = function()
             table.insert(profileButtons, ui.button({
                 key = "overview-profile-" .. profileId,
                 text = item.name,
-                glyph = if item.mode == "gesture" then "arrows-move" else "keyboard",
+                glyph = item.glyph or (if item.mode == "gesture" then "arrows-move" else "keyboard"),
                 selected = selectedPresetId == profileId,
                 onClick = function()
                     selectedPresetId = profileId
@@ -1201,6 +1432,7 @@ render = function()
             table.insert(profileButtons, ui.button({
                 key = "gesture-profile-" .. profileId,
                 text = item.name,
+                glyph = item.glyph or (if item.mode == "gesture" then "arrows-move" else "keyboard"),
                 selected = selectedPresetId == profileId,
                 onClick = function()
                     selectedPresetId = profileId
@@ -1327,7 +1559,10 @@ render = function()
                 ui.label({ text = "Leave empty to use automatic device discovery.", color = "on_surface_variant" }),
             }),
             ui.column({ gap = 4 }, {
-                ui.label({ text = "Gesture button", fontWeight = "medium" }),
+                ui.row({ align = "center", gap = 6 }, {
+                    ui.glyph({ name = "focus", size = 16, color = "on_surface_variant" }),
+                    ui.label({ text = "Thumb button", fontWeight = "medium" }),
+                }),
                 ui.input({
                     key = "trigger-button",
                     value = config.device.triggerButton,
@@ -1336,8 +1571,45 @@ render = function()
                         config.device.triggerButton = value
                     end,
                 }),
-                ui.label({ text = "Save settings before retrying. Redetect manually restarts nnmxd and scans for an accessible Logitech device; the panel does not automatically restart the service when no mouse is found.", color = "on_surface_variant" }),
+                ui.label({ text = "BTN_FORWARD is the usual thumb button. Save settings, then press it once to apply; that press will not trigger its assigned action. Redetect manually restarts nnmxd.", color = "on_surface_variant" }),
             }),
+            ui.column({ gap = 4 }, {
+                ui.label({ text = "DPI", fontWeight = "medium" }),
+                ui.input({
+                    key = "device-dpi",
+                    value = deviceDPIInput,
+                    placeholder = "0",
+                    onChange = function(value)
+                        deviceDPIInput = value
+                    end,
+                }),
+                ui.label({ text = "0 leaves the current hardware setting unchanged. Enter a DPI supported by the mouse; it is set when nnmxd starts or on the next thumb-button press.", color = "on_surface_variant" }),
+            }),
+            ui.row({ gap = 12 }, {
+                ui.column({ flexGrow = 1, gap = 4 }, {
+                    ui.label({ text = "Vertical scroll (%)", fontWeight = "medium" }),
+                    ui.input({
+                        key = "vertical-scroll",
+                        value = verticalScrollInput,
+                        placeholder = "100",
+                        onChange = function(value)
+                            verticalScrollInput = value
+                        end,
+                    }),
+                }),
+                ui.column({ flexGrow = 1, gap = 4 }, {
+                    ui.label({ text = "Horizontal scroll (%)", fontWeight = "medium" }),
+                    ui.input({
+                        key = "horizontal-scroll",
+                        value = horizontalScrollInput,
+                        placeholder = "100",
+                        onChange = function(value)
+                            horizontalScrollInput = value
+                        end,
+                    }),
+                }),
+            }),
+            ui.label({ text = "Scroll scales range from 10% to 500%. Standard and high-resolution wheel events are scaled on their matching axis.", color = "on_surface_variant" }),
         }))
 
         table.insert(pageContent, ui.row({
@@ -1403,17 +1675,19 @@ render = function()
         end
     end
 
+    local niriFocusError = if status ~= nil and type(status.lastError) == "string"
+        and is_niri_focus_error(status.lastError)
+        then status.lastError else ""
     local footerChildren = {
         ui.label({
-            text = if message ~= "" then message else "Apply changes to update nnmxd.",
-            color = if string.find(message, "Could not") or string.find(message, "failed") then "error" else "on_surface_variant",
+            text = if niriFocusError ~= "" then niriFocusError
+                else if message ~= "" then message else "Apply changes to update nnmxd.",
+            color = if niriFocusError ~= "" or string.find(message, "Could not") or string.find(message, "failed")
+                then "error" else "on_surface_variant",
             flexGrow = 1,
             maxLines = 2,
         }),
     }
-    if status ~= nil and type(status.lastError) == "string" and status.lastError ~= "" then
-        table.insert(footerChildren, ui.label({ text = status.lastError, color = "error", maxLines = 2 }))
-    end
     table.insert(footerChildren, ui.button({
         text = if saving then "Saving..." else "Save changes",
         glyph = "device-floppy",
@@ -1457,6 +1731,7 @@ end
 
 function update()
     poll_service_status()
+    refresh_windows()
 end
 
 function onClose()

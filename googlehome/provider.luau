@@ -6,6 +6,7 @@ local devices = {}
 local currentQuery = ""
 local scanStarted = false
 local scanInFlight = false
+local notifyWhenScanCompletes = false
 local connectedUuid = ""
 local connectedName = ""
 local latestStatusPayload = ""
@@ -118,6 +119,13 @@ local function filtered_results(query)
             score = 100,
         })
     end
+    table.insert(results, {
+        id = "refresh",
+        title = if scanInFlight then "Refreshing devices…" else "Refresh devices",
+        subtitle = if scanInFlight then "Scanning the local network with catt" else "Scan the local network for Cast devices",
+        glyph = "refresh",
+        score = 99,
+    })
     for _, device in ipairs(devices) do
         local searchable = string.lower(device.name .. " " .. device.model)
         if needle == "" or string.find(searchable, needle, 1, true) ~= nil then
@@ -145,15 +153,46 @@ local function publish_results(query)
     launcher.setResults(query, filtered_results(query))
 end
 
-local function begin_scan()
-    if scanStarted or dataDir == nil then
+local function notify_scan_complete(deviceCount)
+    local deviceLabel = if deviceCount == 1 then "device" else "devices"
+    local body = `Found {deviceCount} Cast {deviceLabel}.`
+    local started = noctalia.runAsync({
+        "noctalia",
+        "msg",
+        "notification-show",
+        "Google Home",
+        body,
+    }, function(result)
+        if result.timedOut or result.exitCode ~= 0 then
+            local detail = result.stderr ~= "" and result.stderr
+                or result.stdout ~= "" and result.stdout
+                or `exit status {result.exitCode}`
+            noctalia.notifyError("Google Home", `Could not show refresh notification: {detail}`)
+        end
+    end, 5000)
+    if not started then
+        noctalia.notifyError("Google Home", "Could not start the refresh notification.")
+    end
+end
+
+local function begin_scan(force)
+    if dataDir == nil then
+        return
+    end
+    if scanInFlight then
+        notifyWhenScanCompletes = notifyWhenScanCompletes or force
+        return
+    end
+    if scanStarted and not force then
         return
     end
     scanStarted = true
     scanInFlight = true
+    notifyWhenScanCompletes = force
     local started = noctalia.runAsync({ "catt", "scan", "--json-output" }, function(result)
         scanInFlight = false
         if result.timedOut or result.exitCode ~= 0 then
+            notifyWhenScanCompletes = false
             local detail = result.stderr ~= "" and result.stderr
                 or result.stdout ~= "" and result.stdout
                 or `exit status {result.exitCode}`
@@ -164,6 +203,7 @@ local function begin_scan()
 
         local ok, discovered = pcall(noctalia.json.decode, result.stdout)
         if not ok or type(discovered) ~= "table" then
+            notifyWhenScanCompletes = false
             noctalia.notifyError("Google Home", "Could not parse catt device discovery results.")
             publish_results(currentQuery)
             return
@@ -202,13 +242,19 @@ local function begin_scan()
         end)
         devices = nextDevices
         if not save_devices() then
+            notifyWhenScanCompletes = false
             publish_results(currentQuery)
             return
         end
         publish_results(currentQuery)
+        if notifyWhenScanCompletes then
+            notifyWhenScanCompletes = false
+            notify_scan_complete(#devices)
+        end
     end, 20000)
     if not started then
         scanInFlight = false
+        notifyWhenScanCompletes = false
         noctalia.notifyError("Google Home", "Could not start catt device discovery.")
         publish_results(currentQuery)
     end
@@ -289,7 +335,7 @@ end
 function onQuery(query)
     currentQuery = query
     publish_results(query)
-    begin_scan()
+    begin_scan(false)
 end
 
 function onActivate(id)
@@ -297,12 +343,12 @@ function onActivate(id)
         disconnect()
         return
     end
-
-    noctalia.state.watch("googlehome.status", function(payload)
-        latestStatusPayload = if type(payload) == "string" then payload else ""
+    if id == "refresh" then
+        begin_scan(true)
         publish_results(currentQuery)
-    end)
-    latestStatusPayload = noctalia.state.get("googlehome.status") or ""
+        return
+    end
+
     if type(id) ~= "string" or id == "" or dataDir == nil then
         return
     end
@@ -327,3 +373,9 @@ function onActivate(id)
     noctalia.state.set("googlehome.connectedUuid", selected.uuid)
     noctalia.togglePanel("ffngs/googlehome:remote")
 end
+
+noctalia.state.watch("googlehome.status", function(payload)
+    latestStatusPayload = if type(payload) == "string" then payload else ""
+    publish_results(currentQuery)
+end)
+latestStatusPayload = noctalia.state.get("googlehome.status") or ""
