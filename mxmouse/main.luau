@@ -18,6 +18,9 @@ local DEFAULTS = {
             name = "Default",
             mode = "gesture",
             glyph = "arrows-move",
+            dpi = 0,
+            verticalScroll = 0,
+            horizontalScroll = 0,
             threshold = 100,
             retriggerDistance = 100,
             escalation = 0,
@@ -30,6 +33,15 @@ local DEFAULTS = {
                 tap = { type = "niri", value = "toggle-overview" },
                 scrollUp = { type = "niri", value = "focus-workspace-up" },
                 scrollDown = { type = "niri", value = "focus-workspace-down" },
+                thumbwheelLeft = { type = "niri", value = "" },
+                thumbwheelRight = { type = "niri", value = "" },
+                thumbwheelButtonLeft = { type = "niri", value = "" },
+                thumbwheelButtonRight = { type = "niri", value = "" },
+                sideBack = { type = "niri", value = "" },
+                sideForward = { type = "niri", value = "" },
+                thumbLeftClick = { type = "niri", value = "" },
+                thumbMiddleClick = { type = "niri", value = "" },
+                thumbRightClick = { type = "niri", value = "" },
             },
         },
     },
@@ -57,6 +69,8 @@ local installOutput = ""
 local activePage = "overview"
 local nextPresetNumber = 0
 local selectedActionKey = "left"
+local selectedSideButtonKey = "sideBack"
+local profileSectionExpanded = {}
 local actionOptions = { niri = {}, noctalia = {} }
 local logLines = {}
 local logStreamStarted = false
@@ -510,6 +524,9 @@ local function load_config()
         end
         preset.mode = if preset.mode == "meta-toggle" then "meta-toggle" else "gesture"
         preset.glyph = if type(preset.glyph) == "string" and preset.glyph ~= "" then preset.glyph else "arrows-move"
+        preset.dpi = if type(preset.dpi) == "number" then preset.dpi else 0
+        preset.verticalScroll = if type(preset.verticalScroll) == "number" then preset.verticalScroll else 0
+        preset.horizontalScroll = if type(preset.horizontalScroll) == "number" then preset.horizontalScroll else 0
         preset.threshold = if type(preset.threshold) == "number" then preset.threshold else 100
         preset.retriggerDistance = if type(preset.retriggerDistance) == "number" and preset.retriggerDistance > 0
             then preset.retriggerDistance else preset.threshold
@@ -551,13 +568,35 @@ local function load_config()
 end
 
 local function show_notification(body)
-    local started = noctalia.runAsync({
+    local notificationArgs = {
         "noctalia",
         "msg",
         "notification-show",
         "MX Mouse",
         body,
-    }, function(result)
+    }
+    local pluginPath = noctalia.pluginDir()
+    if type(pluginPath) == "string" and pluginPath ~= "" then
+        local hintPath = pluginPath .. "/thumb-press-hint.png"
+        if noctalia.fileExists(hintPath) then
+            local payload, encodeError = noctalia.json.encode({
+                app_name = "MX Mouse",
+                summary = "MX Mouse",
+                body = body,
+                icon = hintPath,
+            })
+            if type(payload) == "string" then
+                notificationArgs = { "noctalia", "msg", "notification-show", payload }
+            else
+                noctalia.notifyError("MX Mouse", `Could not encode notification image payload: {tostring(encodeError)}`)
+            end
+        else
+            noctalia.notifyError("MX Mouse", `Could not find thumb-button hint image: {hintPath}`)
+        end
+    else
+        noctalia.notifyError("MX Mouse", `Could not locate plugin directory for thumb-button hint image: {tostring(pluginPath)}`)
+    end
+    local started = noctalia.runAsync(notificationArgs, function(result)
         if result.timedOut or result.exitCode ~= 0 then
             local detail = result.stderr ~= "" and result.stderr
                 or result.stdout ~= "" and result.stdout
@@ -839,6 +878,9 @@ local function add_preset()
         name = "New preset",
         mode = "gesture",
         glyph = "arrows-move",
+        dpi = 0,
+        verticalScroll = 0,
+        horizontalScroll = 0,
         threshold = 100,
         retriggerDistance = 100,
         escalation = 0,
@@ -851,6 +893,15 @@ local function add_preset()
             tap = { type = "niri", value = "toggle-overview" },
             scrollUp = { type = "niri", value = "focus-workspace-up" },
             scrollDown = { type = "niri", value = "focus-workspace-down" },
+            thumbwheelLeft = { type = "niri", value = "" },
+            thumbwheelRight = { type = "niri", value = "" },
+            thumbwheelButtonLeft = { type = "niri", value = "" },
+            thumbwheelButtonRight = { type = "niri", value = "" },
+            sideBack = { type = "niri", value = "" },
+            sideForward = { type = "niri", value = "" },
+            thumbLeftClick = { type = "niri", value = "" },
+            thumbMiddleClick = { type = "niri", value = "" },
+            thumbRightClick = { type = "niri", value = "" },
         },
     }
     table.insert(config.presets, preset)
@@ -887,15 +938,135 @@ local function delete_selected_preset()
     render()
 end
 
+local function action_field(preset, entry)
+    local key = entry[1]
+    local binding = preset.bindings[key]
+    local actionTypeNames = {
+        { "niri", "Niri" },
+        { "noctalia", "Noctalia" },
+        { "command", "Command" },
+    }
+    local choices = actionOptions[binding.type]
+    local choiceOptions = { "Choose an action…" }
+    if type(choices) == "table" then
+        for _, choice in ipairs(choices) do
+            table.insert(choiceOptions, choice)
+        end
+    end
+    local choiceIndex = 0
+    for choiceIndexInList, choice in ipairs(choices or {}) do
+        if choice == binding.value then
+            choiceIndex = choiceIndexInList
+            break
+        end
+    end
+    local typeTabs = {}
+    for _, item in ipairs(actionTypeNames) do
+        local actionType = item[1]
+        table.insert(typeTabs, ui.button({
+            key = `binding-type-{preset.id}-{key}-{actionType}`,
+            text = item[2],
+            selected = binding.type == actionType,
+            onClick = function()
+                binding.type = actionType
+                binding.value = ""
+                binding.arguments = ""
+                render()
+            end,
+        }))
+    end
+    local fields = {
+        ui.label({ text = `{entry[2]} action`, fontWeight = "semibold" }),
+        ui.row({ gap = 6 }, typeTabs),
+    }
+    if string.find(key, "thumbwheel", 1, true) then
+        table.insert(fields, ui.label({
+            text = "Leave this action unselected to pass horizontal scrolling through unchanged.",
+            color = "on_surface_variant",
+        }))
+    end
+    if binding.type ~= "command" then
+        table.insert(fields, ui.select({
+            key = `binding-choice-{preset.id}-{key}`,
+            options = choiceOptions,
+            selectedIndex = choiceIndex,
+            onChange = function(value)
+                local selected = tonumber(value)
+                if selected == nil or selected <= 0 or choices == nil or selected > #choices then
+                    return
+                end
+                binding.value = choices[selected]
+                render()
+            end,
+        }))
+        table.insert(fields, ui.column({ gap = 3 }, {
+            ui.label({ text = "Arguments (optional)", fontWeight = "medium" }),
+            ui.label({
+                text = "Appended after the action name. Quote arguments that contain spaces.",
+                color = "on_surface_variant",
+            }),
+            ui.input({
+                key = `binding-arguments-{preset.id}-{key}`,
+                value = binding.arguments or "",
+                placeholder = "e.g. 2 or \"ffngs/mxmouse:manager\"",
+                flexGrow = 1,
+                onChange = function(value)
+                    binding.arguments = value
+                end,
+            }),
+        }))
+    else
+        table.insert(fields, ui.column({ gap = 3 }, {
+            ui.label({ text = "Shell command", fontWeight = "medium" }),
+            ui.label({
+                text = "Runs as your user. Use only commands you trust.",
+                color = "on_surface_variant",
+            }),
+            ui.input({
+                key = `binding-{preset.id}-{key}`,
+                value = binding.value,
+                placeholder = "e.g. notify-send 'Mouse gesture'",
+                flexGrow = 1,
+                onChange = function(value)
+                    binding.value = value
+                end,
+            }),
+        }))
+    end
+    return ui.column({ gap = 8, padding = 12, fill = "surface_container_high", radius = 12 }, fields)
+end
+
 local function preset_editor(preset)
+    if profileSectionExpanded[preset.id] == nil then
+        profileSectionExpanded[preset.id] = {
+            gestures = false,
+            thumbChords = false,
+            wheelActions = false,
+            scrollwheel = false,
+            thumbwheel = false,
+            sideButtons = false,
+            dpiScroll = false,
+        }
+    end
+    local expanded = profileSectionExpanded[preset.id]
     local children = {
         ui.row({ align = "center", justify = "space_between", gap = 8 }, {
             ui.column({ flexGrow = 1, gap = 2 }, {
-                ui.label({ text = "Preset profile", fontSize = 16, fontWeight = "bold" }),
+                ui.label({ text = "Profile", fontSize = 16, fontWeight = "bold" }),
                 ui.label({
                     text = if config.defaultPresetId == preset.id then "Default profile" else "Custom profile",
                     color = "on_surface_variant",
                 }),
+            }),
+            ui.button({
+                text = "Make default",
+                glyph = "star",
+                selected = config.defaultPresetId == preset.id,
+                onClick = function()
+                    config.defaultPresetId = preset.id
+                    message = `"{preset.name}" is now the fallback preset. Save to apply.`
+                    render()
+                end,
             }),
             ui.button({
                 text = "Delete",
@@ -905,10 +1076,16 @@ local function preset_editor(preset)
                 onClick = delete_selected_preset,
             }),
         }),
+    }
+    table.insert(children, ui.column({ gap = 8, padding = 12, fill = "surface_container", radius = 12 }, {
+        ui.row({ align = "center", gap = 6 }, {
+            ui.glyph({ name = "user-cog", size = 18, color = "primary" }),
+            ui.label({ text = "Profile", fontWeight = "semibold" }),
+        }),
         ui.input({
             key = "preset-name-" .. preset.id,
             value = preset.name,
-            placeholder = "Preset name",
+            placeholder = "Profile name",
             onChange = function(value)
                 preset.name = value
             end,
@@ -916,7 +1093,7 @@ local function preset_editor(preset)
         ui.row({ align = "center", gap = 8 }, {
             ui.glyph({ name = preset.glyph, size = 20, color = "primary" }),
             ui.column({ flexGrow = 1, gap = 4 }, {
-                ui.label({ text = "Preset glyph" }),
+                ui.label({ text = "Profile glyph" }),
                 ui.input({
                     key = "preset-glyph-" .. preset.id,
                     value = preset.glyph,
@@ -930,6 +1107,7 @@ local function preset_editor(preset)
         ui.row({ gap = 8 }, {
             ui.button({
                 text = "Gesture mode",
+                glyph = "arrows-move",
                 selected = preset.mode == "gesture",
                 onClick = function()
                     preset.mode = "gesture"
@@ -938,106 +1116,241 @@ local function preset_editor(preset)
             }),
             ui.button({
                 text = "Meta toggle",
+                glyph = "keyboard",
                 selected = preset.mode == "meta-toggle",
                 onClick = function()
                     preset.mode = "meta-toggle"
                     render()
                 end,
             }),
-            ui.button({
-                text = "Make default",
-                selected = config.defaultPresetId == preset.id,
-                onClick = function()
-                    config.defaultPresetId = preset.id
-                    message = `"{preset.name}" is now the fallback preset. Save to apply.`
-                    render()
-                end,
-            }),
         }),
+    }))
+
+    local sideButtonEntries = {
+        { "sideBack", "Back side button (BTN_SIDE)", "arrow-left" },
+        { "sideForward", "Front side button (BTN_EXTRA)", "arrow-right" },
     }
+    local function side_button_card()
+        local sideButtonCard = {
+            ui.row({ align = "center", gap = 6 }, {
+                ui.glyph({ name = "mouse", size = 18, color = "primary" }),
+                ui.button({
+                    key = `profile-section-{preset.id}-sideButtons`,
+                    text = "Side buttons",
+                    glyph = if expanded.sideButtons then "chevron-down" else "chevron-right",
+                    variant = "ghost",
+                    contentAlign = "start",
+                    onClick = function()
+                        expanded.sideButtons = not expanded.sideButtons
+                        render()
+                    end,
+                }),
+            }),
+        }
+        if expanded.sideButtons then
+            table.insert(sideButtonCard, ui.row({ gap = 8, align = "center", justify = "center" }, {
+                ui.button({
+                    key = `side-button-{preset.id}-sideBack`,
+                    text = "Back",
+                    glyph = "arrow-left",
+                    selected = selectedSideButtonKey == "sideBack",
+                    onClick = function()
+                        selectedSideButtonKey = "sideBack"
+                        render()
+                    end,
+                }),
+                ui.button({
+                    key = `side-button-{preset.id}-sideForward`,
+                    text = "Front",
+                    glyph = "arrow-right",
+                    selected = selectedSideButtonKey == "sideForward",
+                    onClick = function()
+                        selectedSideButtonKey = "sideForward"
+                        render()
+                    end,
+                }),
+            }))
+            table.insert(sideButtonCard, ui.label({
+                text = "These actions run on press, use the focused app's profile, and work in either profile mode.",
+                color = "on_surface_variant",
+            }))
+            local selectedSideEntry = sideButtonEntries[1]
+            if selectedSideButtonKey == "sideForward" then
+                selectedSideEntry = sideButtonEntries[2]
+            end
+            table.insert(sideButtonCard, action_field(preset, selectedSideEntry))
+        end
+        return ui.column({
+            gap = 8, padding = 12, fill = "surface_container", radius = 12,
+        }, sideButtonCard)
+    end
 
     if preset.mode == "gesture" then
-        table.insert(children, ui.row({ gap = 8 }, {
-            ui.column({ flexGrow = 1, gap = 4 }, {
-                ui.label({ text = "Initial movement threshold (device counts)" }),
-                ui.input({
-                    key = "threshold-" .. preset.id,
-                    value = tostring(preset.threshold),
-                    onChange = function(value)
-                        local number = tonumber(value)
-                        if number ~= nil and math.floor(number) == number then
-                            preset.threshold = number
-                        end
-                    end,
-                }),
-            }),
-            ui.column({ flexGrow = 1, gap = 4 }, {
-                ui.label({ text = "Retrigger distance (device counts)" }),
-                ui.input({
-                    key = "retrigger-distance-" .. preset.id,
-                    value = tostring(preset.retriggerDistance),
-                    onChange = function(value)
-                        local number = tonumber(value)
-                        if number ~= nil and math.floor(number) == number and number > 0 then
-                            preset.retriggerDistance = number
-                        end
-                    end,
-                }),
-            }),
-            ui.column({ flexGrow = 1, gap = 4 }, {
-                ui.label({ text = "Escalation per retrigger (device counts)" }),
-                ui.input({
-                    key = "escalation-" .. preset.id,
-                    value = tostring(preset.escalation),
-                    onChange = function(value)
-                        local number = tonumber(value)
-                        if number ~= nil and math.floor(number) == number and number >= 0 then
-                            preset.escalation = number
-                        end
-                    end,
-                }),
-            }),
-        }))
-        table.insert(children, ui.label({
-            text = "Threshold triggers the first directional action. Retrigger distance is the movement needed between later actions. Escalation adds to that distance after each retrigger; 0 keeps each retrigger the same distance. Retrigger distance defaults to the threshold.",
-            color = "on_surface_variant",
-        }))
-        table.insert(children, ui.label({
-            text = "Select a direction or gesture below to edit its action. Shell commands run as your user.",
-            color = "on_surface_variant",
-        }))
         local bindingNames = {
             { "left", "Left", "arrow-left" }, { "right", "Right", "arrow-right" },
             { "up", "Up", "arrow-up" }, { "down", "Down", "arrow-down" },
             { "tap", "Tap", "hand-click" }, { "scrollUp", "Scroll up", "arrow-up" },
             { "scrollDown", "Scroll down", "arrow-down" },
+            { "thumbwheelLeft", "Left", "arrow-left" },
+            { "thumbwheelRight", "Right", "arrow-right" },
+            { "thumbwheelButtonLeft", "Left", "arrow-left" },
+            { "thumbwheelButtonRight", "Right", "arrow-right" },
+            { "thumbLeftClick", "Thumb + Left click", "arrow-left" },
+            { "thumbMiddleClick", "Thumb + Middle click", "mouse" },
+            { "thumbRightClick", "Thumb + Right click", "arrow-right" },
         }
-        local function action_tab(entry)
+        local gestureBindings = { bindingNames[1], bindingNames[2], bindingNames[3], bindingNames[4], bindingNames[5] }
+        local scrollwheelBindings = { bindingNames[6], bindingNames[7] }
+        local thumbwheelBindings = { bindingNames[8], bindingNames[9], bindingNames[10], bindingNames[11] }
+        local thumbClickBindings = { bindingNames[12], bindingNames[13], bindingNames[14] }
+        local function set_action(entry, section, subgroup)
+            selectedActionKey = entry[1]
+            if section ~= nil then
+                expanded[section] = true
+            end
+            if subgroup ~= nil then
+                expanded[subgroup] = true
+            end
+            render()
+        end
+        local function action_tab(entry, section, subgroup, label)
             local key = entry[1]
             return ui.button({
-                key = `gesture-tab-{preset.id}-{key}`,
-                text = entry[2],
+                key = `profile-action-{preset.id}-{key}`,
+                text = label or entry[2],
                 glyph = entry[3],
                 selected = selectedActionKey == key,
                 onClick = function()
-                    selectedActionKey = key
-                    render()
+                    set_action(entry, section, subgroup)
                 end,
             })
         end
-        table.insert(children, ui.column({ gap = 6 }, {
-            ui.row({ justify = "center", gap = 6 }, { action_tab(bindingNames[3]) }),
-            ui.row({ justify = "center", gap = 6 }, {
-                action_tab(bindingNames[1]),
-                action_tab(bindingNames[2]),
+        local function section_header(title, sectionKey, glyph)
+            return ui.row({ align = "center", gap = 6 }, {
+                ui.glyph({ name = glyph, size = 18, color = "primary" }),
+                ui.button({
+                    key = `profile-section-{preset.id}-{sectionKey}`,
+                    text = title,
+                    glyph = if expanded[sectionKey] then "chevron-down" else "chevron-right",
+                    variant = "ghost",
+                    contentAlign = "start",
+                    onClick = function()
+                        expanded[sectionKey] = not expanded[sectionKey]
+                        render()
+                    end,
+                }),
+            })
+        end
+        local gestureControls = {
+            ui.row({ gap = 8 }, {
+                ui.column({ flexGrow = 1, gap = 4 }, {
+                    ui.label({ text = "Initial movement threshold (device counts)" }),
+                    ui.input({
+                        key = "threshold-" .. preset.id,
+                        value = tostring(preset.threshold),
+                        onChange = function(value)
+                            local number = tonumber(value)
+                            if number ~= nil and math.floor(number) == number then
+                                preset.threshold = number
+                            end
+                        end,
+                    }),
+                }),
+                ui.column({ flexGrow = 1, gap = 4 }, {
+                    ui.label({ text = "Retrigger distance (device counts)" }),
+                    ui.input({
+                        key = "retrigger-distance-" .. preset.id,
+                        value = tostring(preset.retriggerDistance),
+                        onChange = function(value)
+                            local number = tonumber(value)
+                            if number ~= nil and math.floor(number) == number and number > 0 then
+                                preset.retriggerDistance = number
+                            end
+                        end,
+                    }),
+                }),
+                ui.column({ flexGrow = 1, gap = 4 }, {
+                    ui.label({ text = "Escalation per retrigger (device counts)" }),
+                    ui.input({
+                        key = "escalation-" .. preset.id,
+                        value = tostring(preset.escalation),
+                        onChange = function(value)
+                            local number = tonumber(value)
+                            if number ~= nil and math.floor(number) == number and number >= 0 then
+                                preset.escalation = number
+                            end
+                        end,
+                    }),
+                }),
             }),
-            ui.row({ justify = "center", gap = 6 }, { action_tab(bindingNames[4]) }),
-        }))
-        table.insert(children, ui.row({ justify = "center", gap = 6 }, {
-            action_tab(bindingNames[5]),
-            action_tab(bindingNames[6]),
-            action_tab(bindingNames[7]),
-        }))
+            ui.label({
+                text = "Threshold triggers the first directional action. Retrigger distance is the movement needed between later actions. Escalation adds to that distance after each retrigger; 0 keeps each retrigger the same distance. Retrigger distance defaults to the threshold.",
+                color = "on_surface_variant",
+            }),
+        }
+        local function tabs(entries, section, subgroup, labels)
+            local buttons = {}
+            for index, entry in ipairs(entries) do
+                table.insert(buttons, action_tab(entry, section, subgroup, labels and labels[index]))
+            end
+            return ui.row({ gap = 6, align = "center", justify = "center" }, buttons)
+        end
+        local gestureSectionContent = nil
+        local thumbChordSectionContent = nil
+        if expanded.gestures then
+            gestureSectionContent = gestureControls
+            table.insert(gestureSectionContent, ui.label({
+                text = "Choose a direction or tap to configure its action.",
+                color = "on_surface_variant",
+            }))
+            table.insert(gestureSectionContent, ui.column({ gap = 6, align = "center" }, {
+                ui.row({ justify = "center", gap = 6 }, { action_tab(gestureBindings[3], "gestures") }),
+                ui.row({ justify = "center", gap = 6 }, {
+                    action_tab(gestureBindings[1], "gestures"),
+                    action_tab(gestureBindings[2], "gestures"),
+                }),
+                ui.row({ justify = "center", gap = 6 }, { action_tab(gestureBindings[4], "gestures") }),
+            }))
+            table.insert(gestureSectionContent, tabs({ gestureBindings[5] }, "gestures"))
+        end
+        if expanded.thumbChords then
+            thumbChordSectionContent = {
+                ui.label({
+                    text = "Assigned actions replace the click while holding the thumb button. Unassigned clicks pass through normally.",
+                    color = "on_surface_variant",
+                }),
+                tabs(thumbClickBindings, "thumbChords", nil, { "Left click", "Middle click", "Right click" }),
+            }
+        end
+        local wheelSectionContent = nil
+        local scrollwheelContent = nil
+        local thumbwheelContent = nil
+        if expanded.wheelActions then
+            wheelSectionContent = {}
+            scrollwheelContent = {
+                section_header("Scrollwheel", "scrollwheel", "arrows-up-down"),
+            }
+            if expanded.scrollwheel then
+                table.insert(scrollwheelContent, ui.label({
+                    text = "Actions run only while holding the thumb button and turning the vertical scrollwheel.",
+                    color = "on_surface_variant",
+                }))
+                table.insert(scrollwheelContent, tabs(scrollwheelBindings, "wheelActions", "scrollwheel"))
+            end
+            thumbwheelContent = {
+                section_header("Thumbwheel", "thumbwheel", "arrow-left-right"),
+            }
+            if expanded.thumbwheel then
+                table.insert(thumbwheelContent, ui.label({
+                    text = "Unassigned directions preserve horizontal scrolling.",
+                    color = "on_surface_variant",
+                }))
+                table.insert(thumbwheelContent, ui.label({ text = "Without holding the thumb button", fontWeight = "medium" }))
+                table.insert(thumbwheelContent, tabs({ thumbwheelBindings[1], thumbwheelBindings[2] }, "wheelActions", "thumbwheel"))
+                table.insert(thumbwheelContent, ui.label({ text = "While holding the thumb button", fontWeight = "medium" }))
+                table.insert(thumbwheelContent, tabs({ thumbwheelBindings[3], thumbwheelBindings[4] }, "wheelActions", "thumbwheel"))
+            end
+        end
 
         local selectedEntry = nil
         for _, entry in ipairs(bindingNames) do
@@ -1050,97 +1363,75 @@ local function preset_editor(preset)
         selectedActionKey = selectedEntry[1]
 
         local function gesture_field(entry)
-            local key = entry[1]
-            local binding = preset.bindings[key]
-            local actionTypeNames = {
-                { "niri", "Niri" },
-                { "noctalia", "Noctalia" },
-                { "command", "Command" },
-            }
-            local choices = actionOptions[binding.type]
-            local choiceOptions = { "Choose an action…" }
-            if type(choices) == "table" then
-                for _, choice in ipairs(choices) do
-                    table.insert(choiceOptions, choice)
-                end
-            end
-            local choiceIndex = 0
-            for choiceIndexInList, choice in ipairs(choices or {}) do
-                if choice == binding.value then
-                    choiceIndex = choiceIndexInList
-                    break
-                end
-            end
-            local typeTabs = {}
-            for _, item in ipairs(actionTypeNames) do
-                local actionType = item[1]
-                table.insert(typeTabs, ui.button({
-                    key = `binding-type-{preset.id}-{key}-{actionType}`,
-                    text = item[2],
-                    selected = binding.type == actionType,
-                    onClick = function()
-                        binding.type = actionType
-                        binding.value = ""
-                        binding.arguments = ""
-                        render()
-                    end,
-                }))
-            end
-            local fields = {
-                ui.label({ text = `{entry[2]} action`, fontWeight = "semibold" }),
-                ui.row({ gap = 6 }, typeTabs),
-            }
-            if binding.type ~= "command" then
-                table.insert(fields, ui.select({
-                    key = `binding-choice-{preset.id}-{key}`,
-                    options = choiceOptions,
-                    selectedIndex = choiceIndex,
-                    onChange = function(value)
-                        local selected = tonumber(value)
-                        if selected == nil or selected <= 0 or selected > #choices then
-                            return
-                        end
-                        binding.value = choices[selected]
-                        render()
-                    end,
-                }))
-                table.insert(fields, ui.column({ gap = 3 }, {
-                    ui.label({ text = "Arguments (optional)", fontWeight = "medium" }),
-                    ui.label({
-                        text = "Appended after the action name. Quote arguments that contain spaces.",
-                        color = "on_surface_variant",
-                    }),
-                    ui.input({
-                        key = `binding-arguments-{preset.id}-{key}`,
-                        value = binding.arguments or "",
-                        placeholder = "e.g. 2 or \"ffngs/mxmouse:manager\"",
-                        flexGrow = 1,
-                        onChange = function(value)
-                            binding.arguments = value
-                        end,
-                    }),
-                }))
-            else
-                table.insert(fields, ui.column({ gap = 3 }, {
-                    ui.label({ text = "Shell command", fontWeight = "medium" }),
-                    ui.label({
-                        text = "Runs as your user. Use only commands you trust.",
-                        color = "on_surface_variant",
-                    }),
-                    ui.input({
-                        key = `binding-{preset.id}-{key}`,
-                        value = binding.value,
-                        placeholder = "e.g. notify-send 'Mouse gesture'",
-                        flexGrow = 1,
-                        onChange = function(value)
-                            binding.value = value
-                        end,
-                    }),
-                }))
-            end
-            return ui.column({ gap = 8, padding = 12, fill = "surface_container_high", radius = 12 }, fields)
+            return action_field(preset, entry)
         end
-        table.insert(children, gesture_field(selectedEntry))
+        local selectedKey = selectedEntry[1]
+        local selectedIsGesture = selectedKey == "left" or selectedKey == "right"
+            or selectedKey == "up" or selectedKey == "down" or selectedKey == "tap"
+        local selectedIsThumbClick = selectedKey == "thumbLeftClick"
+            or selectedKey == "thumbMiddleClick" or selectedKey == "thumbRightClick"
+        local selectedIsScrollwheel = selectedKey == "scrollUp" or selectedKey == "scrollDown"
+        if (selectedIsGesture and expanded.gestures)
+            or (selectedIsThumbClick and expanded.thumbChords)
+            or (selectedIsScrollwheel and expanded.wheelActions and expanded.scrollwheel)
+            or (string.find(selectedKey, "thumbwheel", 1, true) ~= nil
+                and expanded.wheelActions and expanded.thumbwheel)
+        then
+            if selectedIsGesture then
+                table.insert(gestureSectionContent, gesture_field(selectedEntry))
+            elseif selectedIsThumbClick then
+                table.insert(thumbChordSectionContent, gesture_field(selectedEntry))
+            elseif selectedIsScrollwheel then
+                table.insert(scrollwheelContent, gesture_field(selectedEntry))
+            else
+                table.insert(thumbwheelContent, gesture_field(selectedEntry))
+            end
+        end
+        if wheelSectionContent ~= nil then
+            table.insert(wheelSectionContent, ui.column({
+                gap = 8, padding = 10, fill = "surface_container_high", radius = 10,
+            }, scrollwheelContent))
+            table.insert(wheelSectionContent, ui.column({
+                gap = 8, padding = 10, fill = "surface_container_high", radius = 10,
+            }, thumbwheelContent))
+        end
+        if gestureSectionContent ~= nil then
+            local gestureCard = { section_header("Gestures", "gestures", "arrows-move") }
+            for _, child in ipairs(gestureSectionContent) do
+                table.insert(gestureCard, child)
+            end
+            table.insert(children, ui.column({ gap = 8, padding = 12, fill = "surface_container", radius = 12 }, gestureCard))
+        else
+            table.insert(children, ui.column({ gap = 8, padding = 12, fill = "surface_container", radius = 12 }, {
+                section_header("Gestures", "gestures", "arrows-move"),
+            }))
+        end
+
+        if thumbChordSectionContent ~= nil then
+            local thumbChordCard = { section_header("Thumb Chords", "thumbChords", "mouse") }
+            for _, child in ipairs(thumbChordSectionContent) do
+                table.insert(thumbChordCard, child)
+            end
+            table.insert(children, ui.column({ gap = 8, padding = 12, fill = "surface_container", radius = 12 }, thumbChordCard))
+        else
+            table.insert(children, ui.column({ gap = 8, padding = 12, fill = "surface_container", radius = 12 }, {
+                section_header("Thumb Chords", "thumbChords", "mouse"),
+            }))
+        end
+
+        table.insert(children, side_button_card())
+
+        if wheelSectionContent ~= nil then
+            local wheelCard = { section_header("Wheel actions", "wheelActions", "mouse") }
+            for _, child in ipairs(wheelSectionContent) do
+                table.insert(wheelCard, child)
+            end
+            table.insert(children, ui.column({ gap = 8, padding = 12, fill = "surface_container", radius = 12 }, wheelCard))
+        else
+            table.insert(children, ui.column({ gap = 8, padding = 12, fill = "surface_container", radius = 12 }, {
+                section_header("Wheel actions", "wheelActions", "mouse"),
+            }))
+        end
     else
         local keys = {
             "KEY_LEFTMETA", "KEY_RIGHTMETA", "KEY_LEFTCTRL", "KEY_RIGHTCTRL",
@@ -1161,9 +1452,88 @@ local function preset_editor(preset)
                 render()
             end,
         }))
+        table.insert(children, side_button_card())
     end
 
-    return ui.column({ gap = 12, padding = 16, fill = "surface_container", radius = 14 }, children)
+    local dpiScrollCard = {
+        ui.row({ align = "center", gap = 6 }, {
+            ui.glyph({ name = "adjustments", size = 18, color = "primary" }),
+            ui.button({
+                key = `profile-section-{preset.id}-dpiScroll`,
+                text = "DPI and Scroll speed",
+                glyph = if expanded.dpiScroll then "chevron-down" else "chevron-right",
+                variant = "ghost",
+                contentAlign = "start",
+                onClick = function()
+                    expanded.dpiScroll = not expanded.dpiScroll
+                    render()
+                end,
+            }),
+        }),
+    }
+    if expanded.dpiScroll then
+        table.insert(dpiScrollCard, ui.column({ gap = 8 }, {
+            ui.label({
+                text = "Profile values apply when this profile is focused. A value of 0 uses the matching setting from the Device page.",
+                color = "on_surface_variant",
+            }),
+            ui.row({ gap = 12 }, {
+                ui.column({ flexGrow = 1, gap = 4 }, {
+                    ui.label({ text = "DPI (0 = device setting)" }),
+                    ui.input({
+                        key = "profile-dpi-" .. preset.id,
+                        value = tostring(preset.dpi or 0),
+                        placeholder = "0",
+                        onChange = function(value)
+                            local number = tonumber(value)
+                            if number ~= nil and math.floor(number) == number and number >= 0 then
+                                preset.dpi = number
+                            end
+                        end,
+                    }),
+                }),
+            }),
+            ui.row({ gap = 12 }, {
+                ui.column({ flexGrow = 1, gap = 4 }, {
+                    ui.label({ text = "Vertical scroll (%)" }),
+                    ui.input({
+                        key = "profile-vertical-scroll-" .. preset.id,
+                        value = tostring(preset.verticalScroll or 0),
+                        placeholder = "0",
+                        onChange = function(value)
+                            local number = tonumber(value)
+                            if number ~= nil and math.floor(number) == number and number >= 0 then
+                                preset.verticalScroll = number
+                            end
+                        end,
+                    }),
+                }),
+                ui.column({ flexGrow = 1, gap = 4 }, {
+                    ui.label({ text = "Horizontal scroll (%)" }),
+                    ui.input({
+                        key = "profile-horizontal-scroll-" .. preset.id,
+                        value = tostring(preset.horizontalScroll or 0),
+                        placeholder = "0",
+                        onChange = function(value)
+                            local number = tonumber(value)
+                            if number ~= nil and math.floor(number) == number and number >= 0 then
+                                preset.horizontalScroll = number
+                            end
+                        end,
+                    }),
+                }),
+            }),
+            ui.label({
+                text = "DPI must be supported by the mouse (100–16000). Scroll multipliers range from 10% to 500%; 0 inherits the Device setting.",
+                color = "on_surface_variant",
+            }),
+        }))
+    end
+    table.insert(children, ui.column({
+        gap = 8, padding = 12, fill = "surface_container", radius = 12,
+    }, dpiScrollCard))
+
+    return ui.column({ gap = 10 }, children)
 end
 
 local function button_rows(buttons, buttonsPerRow)
@@ -1262,7 +1632,7 @@ render = function()
 
     local navItems = {
         { "overview", "Overview", "layout-dashboard" },
-        { "gestures", "Gestures", "arrows-move" },
+        { "gestures", "Profiles", "arrows-move" },
         { "apps", "Applications", "apps" },
         { "device", "Device", "settings" },
         { "logs", "Logs", "terminal-2" },
@@ -1328,22 +1698,129 @@ render = function()
                 }),
             }),
         })
-        local pluginPath = noctalia.pluginDir()
-        if type(pluginPath) == "string" and pluginPath ~= ""
-            and noctalia.fileExists(pluginPath .. "/mouse-map.svg")
-        then
-            table.insert(pageContent, ui.row({ align = "center", gap = 12 }, {
-                ui.image({
-                    path = pluginPath .. "/mouse-map.svg",
-                    width = 148,
-                    height = 148,
-                    fit = "contain",
-                }),
-                hero,
-            }))
-        else
-            table.insert(pageContent, hero)
+        table.insert(pageContent, hero)
+
+        local function open_profile_control(section, actionKey, subgroup, sideButtonKey)
+            local profileId = config.defaultPresetId
+            if lastFocusedWindow ~= nil and type(lastFocusedWindow.app_id) == "string" then
+                profileId = config.appPresets[lastFocusedWindow.app_id] or config.defaultPresetId
+            end
+            selectedPresetId = profileId
+            local expanded = profileSectionExpanded[profileId]
+            if expanded == nil then
+                expanded = {
+                    gestures = false,
+                    thumbChords = false,
+                    wheelActions = false,
+                    scrollwheel = false,
+                    thumbwheel = false,
+                    sideButtons = false,
+                    dpiScroll = false,
+                }
+                profileSectionExpanded[profileId] = expanded
+            end
+            if section ~= nil then
+                expanded[section] = true
+            end
+            if subgroup ~= nil then
+                expanded[subgroup] = true
+            end
+            if actionKey ~= nil then
+                selectedActionKey = actionKey
+            end
+            if sideButtonKey ~= nil then
+                selectedSideButtonKey = sideButtonKey
+            end
+            activePage = "gestures"
+            render()
         end
+
+        local controls = {
+            {
+                title = "Thumb Chords",
+                glyph = "mouse",
+                onClick = function()
+                    open_profile_control("thumbChords", "thumbLeftClick")
+                end,
+            },
+            {
+                title = "Scrollwheel (hold thumb)",
+                glyph = "arrows-up-down",
+                onClick = function()
+                    open_profile_control("wheelActions", "scrollUp", "scrollwheel")
+                end,
+            },
+            {
+                title = "Front side button",
+                glyph = "arrow-right",
+                onClick = function()
+                    open_profile_control("sideButtons", nil, nil, "sideForward")
+                end,
+            },
+            {
+                title = "Back side button",
+                glyph = "arrow-left",
+                onClick = function()
+                    open_profile_control("sideButtons", nil, nil, "sideBack")
+                end,
+            },
+            {
+                title = "Thumbwheel",
+                glyph = "arrow-left-right",
+                onClick = function()
+                    open_profile_control("wheelActions", "thumbwheelLeft", "thumbwheel")
+                end,
+            },
+            {
+                title = "Thumb button (tap)",
+                glyph = "hand-click",
+                onClick = function()
+                    open_profile_control("gestures", "tap")
+                end,
+            },
+        }
+        local controlButtons = {}
+        for _, control in ipairs(controls) do
+            table.insert(controlButtons, ui.button({
+                key = `overview-control-{control.title}`,
+                text = control.title,
+                glyph = control.glyph,
+                onClick = control.onClick,
+            }))
+        end
+        table.insert(controlButtons, ui.button({
+            key = "overview-control-gestures",
+            text = "Gestures",
+            glyph = "arrows-move",
+            onClick = function()
+                open_profile_control("gestures", "left")
+            end,
+        }))
+        local pluginPath = noctalia.pluginDir()
+        local mouseIllustration = ui.glyph({ name = "mouse", size = 96, color = "primary" })
+        if type(pluginPath) == "string" and pluginPath ~= ""
+            and noctalia.fileExists(pluginPath .. "/mx-master-map.png")
+        then
+            mouseIllustration = ui.image({
+                path = pluginPath .. "/mx-master-map.png",
+                width = 350,
+                height = 456,
+                fit = "contain",
+            })
+        end
+        table.insert(pageContent, ui.row({
+            align = "center",
+            gap = 0,
+            padding = 16,
+            fill = "surface_container",
+            radius = 14,
+        }, {
+            mouseIllustration,
+            ui.column({ flexGrow = 1, gap = 4 }, {
+                ui.label({ text = "Mouse controls", fontSize = 16, fontWeight = "bold" }),
+                ui.column({ gap = 20 }, controlButtons),
+            }),
+        }))
 
         local profileButtons = {}
         for _, item in ipairs(config.presets) do
@@ -1446,7 +1923,7 @@ render = function()
             onClick = add_preset,
         }))
         local profileCardChildren = {
-            ui.label({ text = "Gesture profiles", fontSize = 16, fontWeight = "bold" }),
+            ui.label({ text = "Profiles", fontSize = 16, fontWeight = "bold" }),
         }
         for _, row in ipairs(button_rows(profileButtons, 3)) do
             table.insert(profileCardChildren, row)

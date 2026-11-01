@@ -1,6 +1,6 @@
 # MX Mouse
 
-Configure Logitech MX Master 3/3S thumb-button gestures and per-window presets for Niri using `nnmxd` and a Noctalia settings panel.
+Configure Logitech MX Master 3/3S thumb-button gestures and per-window profiles for Niri using the Noctalia settings panel and the `nnmxd` service.
 
 ## Plugin
 
@@ -11,52 +11,103 @@ Configure Logitech MX Master 3/3S thumb-button gestures and per-window presets f
 
 ## Requirements
 
-- Niri and `niri` on `PATH`.
-- For the optional installation wizard: `git`, `make`, and Go.
-- The user running Noctalia must have access to the mouse's evdev node and `/dev/uinput`. To set DPI, the user also needs read/write access to the receiver's HID++ `/dev/hidraw*` node. See the nnmxd source repository's setup instructions; adding a user to the `input` group grants access to all input devices.
-- A user systemd manager. The wizard installs and enables `nnmxd.service` without root privileges.
+- Niri and `niri` on `PATH`. This plugin currently supports Niri for window focus and action dispatch.
+- Noctalia Shell, which hosts the settings panel, status display, and notifications.
+- The [`nnmxd` service](https://github.com/uheplm/nnmxd), required to read mouse input and apply profiles. Install it automatically with the panel's installation wizard or manually using the instructions in the [nnmxd README](https://github.com/uheplm/nnmxd#readme).
+- A user systemd manager and access for your user to the mouse's evdev device and `/dev/uinput`. DPI control also needs access to the receiver's HID++ `/dev/hidraw*` node. See [nnmxd input permissions](https://github.com/uheplm/nnmxd#input-permissions).
+
+Other compositors and shells are not supported by this plugin. `nnmxd` can run with custom configuration and shell commands, but integrations other than Niri and Noctalia have not been implemented.
 
 ## Installation
 
-The panel checks whether `nnmxd` is installed. If it is missing, it offers an installation wizard that:
+Install the plugin from the Noctalia community catalog. The panel checks whether `nnmxd` is installed and offers to install it if missing.
 
-1. Clones the nnmxd source into `~/.local/src/nnmxd`.
-2. Runs `make install`, which builds the daemon locally and installs it to `~/.local/bin`.
+The optional automatic installation wizard:
+
+1. Clones [`uheplm/nnmxd`](https://github.com/uheplm/nnmxd) to `~/.local/src/nnmxd`.
+2. Runs `make install` to build the service locally and install it to `~/.local/bin`.
 3. Installs, enables, and starts the `nnmxd.service` user unit.
 
-The wizard displays command output and errors. It does not use `sudo`; Go modules are downloaded by Go during the local build. Review the source and ensure input-device permissions are configured before starting the service.
+The wizard does not use `sudo`; Go downloads the build dependencies. Review the source and configure device permissions before starting the service.
 
-The source is hosted at `https://github.com/uheplm/nnmxd`. It can also be installed manually from a checkout with `make install`.
+To install manually, follow the [nnmxd installation guide](https://github.com/uheplm/nnmxd#install):
+
+```sh
+git clone https://github.com/uheplm/nnmxd.git ~/.local/src/nnmxd
+make -C ~/.local/src/nnmxd install
+```
 
 ## Usage
 
-Install this plugin from the community catalog, then open its panel:
+Open the panel from the plugin entry or run:
 
 ```sh
 noctalia msg panel-toggle ffngs/mxmouse:manager
 ```
 
-The panel is organized into **Overview**, **Gestures**, **Applications**, **Device**, and **Logs** pages. Overview shows daemon/device status and your profiles; it retains the last focused Niri app when the panel has no focused window and refreshes the focus display while open. Gesture profiles can each be assigned a glyph by its name. Gesture controls are grouped by direction and mode; application assignments use Niri's exact `app_id` and show icons resolved by Noctalia; and device/service options are kept separate from everyday gesture editing. **Save changes** validates and atomically writes the configuration, then asks you to press the thumb button once to apply it. That press is consumed and will not run its assigned gesture or toggle action; the panel sends a notification after nnmxd confirms the apply. BTN_FORWARD is the usual thumb button. Use **Redetect** to restart nnmxd when changing the input device. If no compatible mouse is connected, the panel reports **No MX mouse connected** rather than presenting the daemon as connected; the panel does not automatically restart the service. In this case nnmxd remains running and checks for a device, while **Retry detection** is a manual action. While the panel is open, it refreshes nnmxd service and device status every second, so restart and redetection results appear without reopening the panel. The Logs page starts a live `journalctl` stream for `nnmxd.service` when opened and keeps the latest 250 lines in the panel for troubleshooting.
+### Overview
 
-Each gesture has its own tab in a cross-shaped directional selector, with separate tabs for tap and scroll. A selected gesture can run a Niri action, a Noctalia `msg` command, or a custom shell command. Niri and Noctalia choices are loaded from their installed CLI help. The optional arguments field is appended after the selected action, allowing parameters such as a workspace number or panel ID. Custom shell commands run as the user and can execute arbitrary programs, so only bind commands you trust. The initial movement threshold triggers the first directional action; retrigger distance controls movement between later actions and defaults to the threshold. Escalation adds to the retrigger distance after each action and defaults to `0`. All distances are in evdev relative-motion counts. Meta-toggle presets latch a supported modifier key on each press and release held virtual keys when the service exits.
+- Shows service state, connected mouse, focused app, and its active profile.
+- Provides mouse-map shortcuts to the profile controls. The shortcuts open the corresponding section for the focused app's profile.
+- Includes controls to refresh the window list and restart the input service.
 
-The action pickers load options from `niri msg action` and `noctalia msg --help`. Noctalia media sub-actions (such as `media next` and `media volume-up`) are loaded from `noctalia msg media --help`; add any required parameters, such as a volume step, in **Arguments (optional)**.
+### Profiles
+
+Profiles are selected based on the focused window's exact Niri `app_id`; windows without an explicit assignment use the default profile. Window titles are displayed for identification and are not used for matching.
+
+Each profile has the following sections:
+
+- **Profile** — Set its name, glyph, mode, or make it the default profile.
+- **Gestures** — In Gesture mode, assign directional actions and a tap action. Movement threshold controls the first directional action; retrigger distance controls later actions, and escalation increases the distance after each retrigger.
+- **Thumb Chords** — Assign actions to thumb + left, middle, or right click. An assigned chord runs on click-down and consumes that click and release; an unassigned chord passes through as a normal click. Available in Gesture mode.
+- **Side buttons** — Assign actions to the back (`BTN_SIDE`) and front (`BTN_EXTRA`) side buttons. An assigned action runs on press; unassigned buttons pass through. Available in either profile mode. The under-wheel button is not configurable.
+- **Wheel actions** — Configure vertical scrollwheel actions while holding the thumb button, and thumbwheel left/right actions with independent bindings for normal use and while holding the thumb button. Unassigned thumbwheel directions preserve horizontal scrolling.
+- **DPI and Scroll speed** — Override DPI and vertical/horizontal scroll scales per profile. A profile value of `0` inherits the matching Device-page value. Profile DPI changes follow app focus without requiring another thumb-button press; scroll scales take effect on the next wheel event.
+
+Actions can invoke Niri actions, Noctalia `msg` commands, or custom shell commands. Niri and Noctalia choices are populated from their installed command-line help. Optional arguments are appended to the selected action. Shell commands run as your user and can execute arbitrary programs; only bind commands you trust.
+
+### Applications
+
+Assign a profile to a Niri `app_id`. **Next preset** cycles through the available profiles for that app. Other windows continue to use the default profile.
+
+### Device
+
+Configure device detection, the input-device path, thumb trigger, default DPI, and default vertical/horizontal scroll scale. `BTN_FORWARD` is the usual MX Master thumb button. Changing detection, device path, or trigger button requires restarting the service.
+
+Device and profile scroll scales are percentages from 10 to 500; `100` preserves the input. DPI `0` leaves the device setting unchanged at the Device level and inherits the Device setting at the profile level. DPI control depends on the mouse and receiver supporting HID++ adjustable DPI and on the user having hidraw access.
+
+### Logs
+
+Shows the live `journalctl` stream for `nnmxd.service` while the page is open, retaining the latest 250 lines.
+
+### Saving changes
+
+**Save changes** validates the staged configuration through `nnmxd` and atomically replaces the live configuration only when valid. After saving, press the thumb button once to apply it. That press is consumed and will not run the assigned gesture or toggle action; the panel confirms the applied generation with a notification that includes a static image highlighting the button.
 
 ## Configuration and status
 
-The panel writes `$XDG_CONFIG_HOME/mxmouse/config.json`, falling back to `~/.config/mxmouse/config.json`. It reads runtime status from `$XDG_RUNTIME_DIR/mxmouse/status.json`. The nnmxd daemon validates a staged config and atomically replaces the live file; invalid edits are reported in the panel without replacing the prior valid config.
+The plugin stores configuration in `$XDG_CONFIG_HOME/mxmouse/config.json`, falling back to `~/.config/mxmouse/config.json`. Runtime status is read from `$XDG_RUNTIME_DIR/mxmouse/status.json`.
 
-Per-window matching uses Niri's exact `app_id`. Titles are displayed only to help identify windows; title matching is not used.
+For the complete configuration schema, service lifecycle, runtime status fields, and troubleshooting instructions, see the [nnmxd README](https://github.com/uheplm/nnmxd#readme).
 
 ## Settings
 
-The `modifier` bar widget can be configured to **Hide when inactive**. When visible, it shows `META` while the modifier is latched; clicking it opens the MX Mouse panel.
+The `modifier` bar widget can be configured to **Hide when inactive**. When visible, it shows `META` while a modifier is latched; clicking the widget opens the MX Mouse panel.
 
 ## Notes
 
-- The service grabs the physical mouse while running and forwards ordinary pointer events through a virtual uinput clone. Gesture input is consumed while the thumb button is held.
-- nnmxd is a user service and does not use or launch the old `mxmoused` executable.
-- DPI can be set through the mouse's native HID++ adjustable-DPI feature without installing Solaar, LogiOps, or logid. Set DPI to `0` to leave the hardware setting unchanged; after saving, press the thumb button once to apply the configuration. DPI options are device-specific, and an unsupported value or missing HID++ access is reported in the service status and journal; panel notifications for DPI errors are deferred until a saved configuration is applied. On some devices, onboard profile settings can override host-set DPI.
-- Vertical and horizontal scrolling have separate 10%-500% multipliers. Both standard and high-resolution wheel events are scaled; `100%` preserves the original event values. After saving, press the thumb button once to apply the new scales; that press does not trigger its assigned action.
-- The `modifier` bar widget reads `$XDG_RUNTIME_DIR/mxmouse/status.json` and displays the latched modifier state; it can be configured to hide while no modifier is active.
-- After installation, device access and Niri action dispatch happen locally. The installation wizard needs network access to clone the source and download Go modules.
+- `nnmxd` grabs the physical mouse while running and forwards ordinary pointer events through a virtual uinput clone. Gesture input is consumed while the thumb button is held.
+- DPI is set using the mouse's native HID++ adjustable-DPI feature; Solaar, LogiOps, and logid are not required. Device support varies, and onboard profile settings can override a host-set DPI.
+- The `modifier` widget reads the daemon's runtime status file. `nnmxd` itself has no Waybar-specific output or integration.
+- The service and action dispatch run locally. The automatic installer needs network access to clone the repository and download Go modules.
+
+## Development
+
+```sh
+make test
+make build
+```
+
+## License
+
+MIT

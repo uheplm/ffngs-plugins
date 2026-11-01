@@ -168,7 +168,7 @@ local function render()
             key = "player-time",
             text = if duration > 0
                 then `{format_time(currentTime)} / {format_time(duration)}`
-                else "--:-- / --:--",
+            else "--:-- / --:--",
             color = "on_surface_variant",
             textAlign = "end",
         }),
