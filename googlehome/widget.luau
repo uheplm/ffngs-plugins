@@ -210,6 +210,11 @@ control = function(action)
     if connectedDevice == nil or controlInFlight then
         return
     end
+    if action == "volumeup" or action == "volumedown" then
+        noctalia.state.set("googlehome.suppressVolumeOsdUntil", os.time() + 8)
+    elseif action == "play" or action == "pause" or action == "next" then
+        noctalia.state.set("googlehome.suppressTrackOsdUntil", os.time() + 8)
+    end
     local command
     local timeout = 15000
     if action == "play" or action == "pause" or action == "next" then

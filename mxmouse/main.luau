@@ -24,6 +24,10 @@ local DEFAULTS = {
             threshold = 100,
             retriggerDistance = 100,
             escalation = 0,
+            separateAxisSettings = false,
+            xAxis = { threshold = 100, retriggerDistance = 100, escalation = 0 },
+            yAxis = { threshold = 100, retriggerDistance = 100, escalation = 0 },
+            windowSizeScaling = "disabled",
             metaKey = "KEY_LEFTMETA",
             bindings = {
                 left = { type = "niri", value = "focus-column-left" },
@@ -54,6 +58,11 @@ local CANDIDATE_PATH = nil
 local config = nil
 local status = nil
 local daemonInstalled = nil
+local daemonVersion = nil
+local daemonNeedsUpdate = false
+local daemonVersionError = nil
+local requiredDaemonVersion = nil
+local copiedUpdateCommands = {}
 local serviceEnabled = nil
 local serviceActive = nil
 local windows = {}
@@ -63,9 +72,11 @@ local verticalScrollInput = "100"
 local horizontalScrollInput = "100"
 local message = ""
 local saving = false
-local installing = false
-local installStep = ""
-local installOutput = ""
+local configuringService = false
+local localSourceAvailable = false
+local localBuildAvailable = false
+local localBuildReady = false
+local localBuildVersion = nil
 local activePage = "overview"
 local nextPresetNumber = 0
 local selectedActionKey = "left"
@@ -81,11 +92,10 @@ local windowListSignature = ""
 local lastFocusedWindow = nil
 local appIconPaths = {}
 local notifiedServiceError = ""
+local notifiedDaemonVersion = ""
 local pendingConfigGeneration = nil
 local load_status
 local render
-
-local DAEMON_REPOSITORY = "https://github.com/uheplm/nnmxd.git"
 
 local function default_config()
     local defaults = noctalia.json.decode(noctalia.json.encode(DEFAULTS))
@@ -273,20 +283,125 @@ local function poll_service_status()
     end
 end
 
+local function parse_version(value)
+    if type(value) ~= "string" then
+        return nil
+    end
+    local major, minor, patch = string.match(value, "^(%d+)%.(%d+)%.(%d+)$")
+    if major == nil then
+        return nil
+    end
+    return { tonumber(major), tonumber(minor), tonumber(patch) }
+end
+
+local function version_at_least(actual, required)
+    for index = 1, 3 do
+        if actual[index] ~= required[index] then
+            return actual[index] > required[index]
+        end
+    end
+    return true
+end
+
+local function required_daemon_version()
+    local pluginPath = noctalia.pluginDir()
+    if type(pluginPath) ~= "string" or pluginPath == "" then
+        return nil, `Could not locate MX Mouse plugin directory: {tostring(pluginPath)}`
+    end
+    local contents, readError = noctalia.readFile(pluginPath .. "/NNMXD_VERSION_TARGET")
+    if type(contents) ~= "string" then
+        return nil, `Could not read NNMXD_VERSION_TARGET: {tostring(readError)}`
+    end
+    local version = string.match(contents, "^%s*(.-)%s*$")
+    if parse_version(version) == nil then
+        return nil, "NNMXD_VERSION_TARGET must contain a version in MAJOR.MINOR.PATCH format."
+    end
+    return version
+end
+
 local function check_daemon()
     daemonInstalled = nil
+    daemonVersion = nil
+    daemonNeedsUpdate = false
+    daemonVersionError = nil
+    requiredDaemonVersion = nil
     serviceEnabled = nil
+    localSourceAvailable = false
+    localBuildAvailable = false
+    localBuildReady = false
+    localBuildVersion = nil
     render()
-    local daemonCommand = "nnmxd"
+
+    local requiredVersion, versionError = required_daemon_version()
+    if requiredVersion == nil then
+        daemonVersionError = versionError
+        message = versionError
+        render()
+        return
+    end
+    requiredDaemonVersion = requiredVersion
+    local requiredParts = parse_version(requiredVersion)
+
     local home = noctalia.getenv("HOME")
+    if type(home) == "string" and home ~= "" then
+        local sourcePath = home .. "/.local/src/nnmxd"
+        localSourceAvailable = noctalia.fileExists(sourcePath .. "/Makefile")
+        localBuildAvailable = noctalia.fileExists(sourcePath .. "/bin/nnmxd")
+            and noctalia.fileExists(sourcePath .. "/configs/nnmxd.service")
+        if localBuildAvailable then
+            local buildVersionStarted = noctalia.runAsync(
+                { sourcePath .. "/bin/nnmxd", "--version" },
+                function(buildResult)
+                    if not buildResult.timedOut and buildResult.exitCode == 0 then
+                        local buildOutput = (buildResult.stdout or "") .. "\n" .. (buildResult.stderr or "")
+                        localBuildVersion = string.match(buildOutput, "nnmxd%s+(%d+%.%d+%.%d+)")
+                        local buildParts = parse_version(localBuildVersion)
+                        local requiredParts = parse_version(requiredVersion)
+                        localBuildReady = buildParts ~= nil and version_at_least(buildParts, requiredParts)
+                    end
+                    render()
+                end,
+                3000
+            )
+            if not buildVersionStarted then
+                localBuildReady = false
+            end
+        end
+    end
+    local daemonCommand = "nnmxd"
     if type(home) == "string" and home ~= "" and noctalia.fileExists(home .. "/.local/bin/nnmxd") then
         daemonCommand = home .. "/.local/bin/nnmxd"
     end
     local started = noctalia.runAsync({ daemonCommand, "--version" }, function(result)
         daemonInstalled = not result.timedOut and result.exitCode == 0
         if daemonInstalled then
+            local versionOutput = (result.stdout or "") .. "\n" .. (result.stderr or "")
+            daemonVersion = string.match(versionOutput, "nnmxd%s+(%d+%.%d+%.%d+)")
+            local actualParts = parse_version(daemonVersion)
+            if actualParts == nil then
+                daemonVersionError = "Could not determine the installed nnmxd version."
+                daemonNeedsUpdate = true
+                if notifiedDaemonVersion ~= daemonVersionError then
+                    notifiedDaemonVersion = daemonVersionError
+                    noctalia.notifyError("MX Mouse", daemonVersionError)
+                end
+            else
+                daemonNeedsUpdate = not version_at_least(actualParts, requiredParts)
+                if daemonNeedsUpdate then
+                    local notice = `nnmxd {daemonVersion} is too old; MX Mouse requires {requiredVersion}. Rebuild and update the service.`
+                    if notifiedDaemonVersion ~= daemonVersion then
+                        notifiedDaemonVersion = daemonVersion
+                        noctalia.notifyError("MX Mouse", notice)
+                    end
+                else
+                    notifiedDaemonVersion = ""
+                end
+            end
             check_service()
         else
+            daemonVersion = nil
+            daemonNeedsUpdate = false
+            daemonVersionError = nil
             serviceActive = false
             status = nil
             render()
@@ -299,132 +414,144 @@ local function check_daemon()
     end
 end
 
-local function append_install_output(label, result)
-    local chunks = {}
-    if type(result.stdout) == "string" and result.stdout ~= "" then
-        table.insert(chunks, result.stdout)
-    end
-    if type(result.stderr) == "string" and result.stderr ~= "" then
-        table.insert(chunks, result.stderr)
-    end
-    if #chunks > 0 then
-        installOutput ..= `\n$ {label}\n{table.concat(chunks, "\n")}`
-        if #installOutput > 6000 then
-            installOutput = string.sub(installOutput, #installOutput - 5999)
-        end
-    end
-end
-
-local function install_failed(label, result)
-    installing = false
-    installStep = ""
-    local detail = result.stderr ~= "" and result.stderr
-        or result.stdout ~= "" and result.stdout
-    if detail == nil or detail == "" then
-        detail = if result.timedOut then "command timed out" else `exit status {result.exitCode}`
-    end
-    message = `nnmxd installation failed during {label}: {detail}`
-    render()
-end
-
-local function install_nnmxd()
-    if installing then
+local function configure_service()
+    if configuringService then
         return
     end
     local home = noctalia.getenv("HOME")
     if type(home) ~= "string" or home == "" then
-        message = "Could not resolve HOME; cannot install nnmxd."
+        message = "Could not resolve HOME; cannot configure nnmxd.service."
         render()
         return
     end
+
     local sourcePath = home .. "/.local/src/nnmxd"
-    local sourceParent = home .. "/.local/src"
-    installing = true
-    installOutput = ""
-    installStep = "Preparing source directory"
-    message = "The wizard will clone the source, build nnmxd, install its user unit, and enable the service."
+    local installBuild = localBuildReady
+    if (daemonNeedsUpdate or daemonVersionError ~= nil) and not installBuild then
+        message = "Build the required nnmxd version from the reviewed source first, then check again."
+        render()
+        return
+    end
+
+    configuringService = true
+    message = if installBuild then "Installing the locally built daemon and service unit..."
+        else "Reloading the user service manager..."
     render()
 
-    local function run_install()
-        local function install_project()
-            installStep = "Building and installing nnmxd"
-            render()
-            local started = noctalia.runAsync({ "make", "-C", sourcePath, "install" }, function(result)
-                append_install_output("make install", result)
-                if result.timedOut or result.exitCode ~= 0 then
-                    install_failed("make install", result)
-                    return
-                end
-
-                installStep = "Verifying installation"
+    local function restart_service()
+        local restartStarted = noctalia.runAsync({
+            "systemctl", "--user", "restart", "nnmxd.service",
+        }, function(restartResult)
+            configuringService = false
+            if restartResult.timedOut or restartResult.exitCode ~= 0 then
+                local detail = restartResult.stderr ~= "" and restartResult.stderr
+                    or restartResult.stdout ~= "" and restartResult.stdout
+                    or `exit status {restartResult.exitCode}`
+                message = `Could not restart nnmxd.service: {detail}`
                 render()
-                local binary = home .. "/.local/bin/nnmxd"
-                local verifyStarted = noctalia.runAsync({ binary, "--version" }, function(verifyResult)
-                    append_install_output("nnmxd --version", verifyResult)
-                    if verifyResult.timedOut or verifyResult.exitCode ~= 0 then
-                        install_failed("verification", verifyResult)
-                        return
-                    end
-                    installing = false
-                    installStep = ""
-                    daemonInstalled = true
-                    message = "nnmxd installed; its user service was enabled and started."
-                    check_service()
-                    render()
-                end, 3000)
-                if not verifyStarted then
-                    installing = false
-                    installStep = ""
-                    daemonInstalled = false
-                    message = "Installation finished, but the nnmxd binary could not be started for verification."
-                    render()
-                end
-            end, 300000)
-            if not started then
-                installing = false
-                installStep = ""
-                message = "Could not start make to build nnmxd."
-                render()
-            end
-        end
-
-        if noctalia.fileExists(sourcePath .. "/Makefile") then
-            install_project()
-            return
-        end
-
-        installStep = "Cloning nnmxd source"
-        render()
-        local cloneStarted = noctalia.runAsync({
-            "git", "clone", "--depth", "1", DAEMON_REPOSITORY, sourcePath,
-        }, function(result)
-            append_install_output("git clone", result)
-            if result.timedOut or result.exitCode ~= 0 then
-                install_failed("git clone", result)
                 return
             end
-            install_project()
-        end, 120000)
-        if not cloneStarted then
-            installing = false
-            installStep = ""
-            message = "Could not start git to clone nnmxd."
+            message = "nnmxd.service has been updated and restarted."
+            check_daemon()
+        end, 10000)
+        if not restartStarted then
+            configuringService = false
+            message = "Could not start systemctl to restart nnmxd.service."
             render()
         end
     end
 
-    local mkdirStarted = noctalia.runAsync({ "mkdir", "-p", sourceParent }, function(result)
-        append_install_output("mkdir source directory", result)
-        if result.timedOut or result.exitCode ~= 0 then
-            install_failed("source directory setup", result)
+    local function reload_and_enable()
+        message = "Reloading the user service manager..."
+        render()
+        local reloadStarted = noctalia.runAsync({ "systemctl", "--user", "daemon-reload" }, function(reloadResult)
+            if reloadResult.timedOut or reloadResult.exitCode ~= 0 then
+                configuringService = false
+                local detail = reloadResult.stderr ~= "" and reloadResult.stderr
+                    or reloadResult.stdout ~= "" and reloadResult.stdout
+                    or `exit status {reloadResult.exitCode}`
+                message = `Could not reload the user service manager: {detail}`
+                render()
+                return
+            end
+
+            message = "Enabling and starting nnmxd.service..."
+            render()
+            local enableStarted = noctalia.runAsync({
+                "systemctl", "--user", "enable", "--now", "nnmxd.service",
+            }, function(enableResult)
+                if enableResult.timedOut or enableResult.exitCode ~= 0 then
+                    configuringService = false
+                    local detail = enableResult.stderr ~= "" and enableResult.stderr
+                        or enableResult.stdout ~= "" and enableResult.stdout
+                        or `exit status {enableResult.exitCode}`
+                    message = `Could not enable and start nnmxd.service: {detail}`
+                    render()
+                    return
+                end
+                if installBuild then
+                    restart_service()
+                else
+                    configuringService = false
+                    message = "nnmxd.service is enabled and started."
+                    check_daemon()
+                end
+            end, 10000)
+            if not enableStarted then
+                configuringService = false
+                message = "Could not start systemctl to enable nnmxd.service."
+                render()
+            end
+        end, 10000)
+        if not reloadStarted then
+            configuringService = false
+            message = "Could not start systemctl to reload the user service manager."
+            render()
+        end
+    end
+
+    if not installBuild then
+        reload_and_enable()
+        return
+    end
+
+    local binaryStarted = noctalia.runAsync({
+        "install", "-Dm0755", sourcePath .. "/bin/nnmxd", home .. "/.local/bin/nnmxd",
+    }, function(binaryResult)
+        if binaryResult.timedOut or binaryResult.exitCode ~= 0 then
+            configuringService = false
+            local detail = binaryResult.stderr ~= "" and binaryResult.stderr
+                or binaryResult.stdout ~= "" and binaryResult.stdout
+                or `exit status {binaryResult.exitCode}`
+            message = `Could not install the locally built nnmxd binary: {detail}`
+            render()
             return
         end
-        run_install()
-    end, 5000)
-    if not mkdirStarted then
-        installing = false
-        installStep = ""
-        message = "Could not create the nnmxd source directory."
+
+        local unitStarted = noctalia.runAsync({
+            "install", "-Dm0644", sourcePath .. "/configs/nnmxd.service",
+            home .. "/.config/systemd/user/nnmxd.service",
+        }, function(unitResult)
+            if unitResult.timedOut or unitResult.exitCode ~= 0 then
+                configuringService = false
+                local detail = unitResult.stderr ~= "" and unitResult.stderr
+                    or unitResult.stdout ~= "" and unitResult.stdout
+                    or `exit status {unitResult.exitCode}`
+                message = `Could not install nnmxd.service: {detail}`
+                render()
+                return
+            end
+            reload_and_enable()
+        end, 10000)
+        if not unitStarted then
+            configuringService = false
+            message = "Could not start install to configure nnmxd.service."
+            render()
+        end
+    end, 10000)
+    if not binaryStarted then
+        configuringService = false
+        message = "Could not start install to configure the nnmxd binary."
         render()
     end
 end
@@ -531,6 +658,27 @@ local function load_config()
         preset.retriggerDistance = if type(preset.retriggerDistance) == "number" and preset.retriggerDistance > 0
             then preset.retriggerDistance else preset.threshold
         preset.escalation = if type(preset.escalation) == "number" then preset.escalation else 0
+        preset.separateAxisSettings = preset.separateAxisSettings == true
+        if type(preset.xAxis) ~= "table" then
+            preset.xAxis = {}
+        end
+        if type(preset.yAxis) ~= "table" then
+            preset.yAxis = {}
+        end
+        for _, axis in ipairs({ preset.xAxis, preset.yAxis }) do
+            axis.threshold = if type(axis.threshold) == "number" and axis.threshold > 0
+                then axis.threshold else preset.threshold
+            axis.retriggerDistance = if type(axis.retriggerDistance) == "number" and axis.retriggerDistance > 0
+                then axis.retriggerDistance else preset.retriggerDistance
+            axis.escalation = if type(axis.escalation) == "number" and axis.escalation >= 0
+                then axis.escalation else preset.escalation
+        end
+        if preset.windowSizeScaling ~= "threshold"
+            and preset.windowSizeScaling ~= "retrigger"
+            and preset.windowSizeScaling ~= "all"
+        then
+            preset.windowSizeScaling = "disabled"
+        end
         preset.metaKey = if type(preset.metaKey) == "string" then preset.metaKey else "KEY_LEFTMETA"
     end
     if type(decoded.defaultPresetId) ~= "string" then
@@ -610,7 +758,8 @@ local function show_notification(body)
 end
 
 local function is_niri_focus_error(serviceError)
-    return serviceError == "Niri reports no focused window"
+    return string.find(serviceError, "Niri reports no focused window", 1, true) ~= nil
+        or string.find(serviceError, "Niri focused window has no app_id", 1, true) ~= nil
 end
 
 local function is_dpi_error(serviceError)
@@ -870,40 +1019,27 @@ local function start_log_stream()
     end
 end
 
+local function copy_table(value)
+    local copy = {}
+    for key, item in pairs(value) do
+        copy[key] = if type(item) == "table" then copy_table(item) else item
+    end
+    return copy
+end
+
 local function add_preset()
     nextPresetNumber += 1
     local id = `preset-{tostring(os.time())}-{tostring(nextPresetNumber)}`
-    local preset = {
-        id = id,
-        name = "New preset",
-        mode = "gesture",
-        glyph = "arrows-move",
-        dpi = 0,
-        verticalScroll = 0,
-        horizontalScroll = 0,
-        threshold = 100,
-        retriggerDistance = 100,
-        escalation = 0,
-        metaKey = "KEY_LEFTMETA",
-        bindings = {
-            left = { type = "niri", value = "focus-column-left" },
-            right = { type = "niri", value = "focus-column-right" },
-            up = { type = "niri", value = "focus-workspace-up" },
-            down = { type = "niri", value = "focus-workspace-down" },
-            tap = { type = "niri", value = "toggle-overview" },
-            scrollUp = { type = "niri", value = "focus-workspace-up" },
-            scrollDown = { type = "niri", value = "focus-workspace-down" },
-            thumbwheelLeft = { type = "niri", value = "" },
-            thumbwheelRight = { type = "niri", value = "" },
-            thumbwheelButtonLeft = { type = "niri", value = "" },
-            thumbwheelButtonRight = { type = "niri", value = "" },
-            sideBack = { type = "niri", value = "" },
-            sideForward = { type = "niri", value = "" },
-            thumbLeftClick = { type = "niri", value = "" },
-            thumbMiddleClick = { type = "niri", value = "" },
-            thumbRightClick = { type = "niri", value = "" },
-        },
-    }
+    local defaultPreset = config.presets[1]
+    for _, candidate in ipairs(config.presets) do
+        if candidate.id == config.defaultPresetId then
+            defaultPreset = candidate
+            break
+        end
+    end
+    local preset = copy_table(defaultPreset)
+    preset.id = id
+    preset.name = "New preset"
     table.insert(config.presets, preset)
     selectedPresetId = id
     message = "New preset added. Edit it and save."
@@ -1241,53 +1377,125 @@ local function preset_editor(preset)
                 }),
             })
         end
-        local gestureControls = {
-            ui.row({ gap = 8 }, {
-                ui.column({ flexGrow = 1, gap = 4 }, {
-                    ui.label({ text = "Initial movement threshold (device counts)" }),
+        local gestureControls = {}
+        table.insert(gestureControls, ui.column({ gap = 4 }, {
+            ui.label({ text = "Gesture axis tuning" }),
+            ui.select({
+                key = "gesture-axis-mode-" .. preset.id,
+                options = { "Same for both axes", "Configure X and Y separately" },
+                selectedIndex = if preset.separateAxisSettings then 1 else 0,
+                onChange = function(value)
+                    local selected = tonumber(value)
+                    if selected ~= 0 and selected ~= 1 then
+                        message = "Could not select the gesture axis tuning mode."
+                        render()
+                        return
+                    end
+                    if selected == 1 and not preset.separateAxisSettings then
+                        for _, axis in ipairs({ preset.xAxis, preset.yAxis }) do
+                            axis.threshold = preset.threshold
+                            axis.retriggerDistance = preset.retriggerDistance
+                            axis.escalation = preset.escalation
+                        end
+                    end
+                    preset.separateAxisSettings = selected == 1
+                    render()
+                end,
+            }),
+        }))
+        local function distance_control(axisName, field, label, value, minimum)
+            return {
+                label = ui.label({ text = label, flexGrow = 1 }),
+                input = ui.column({ flexGrow = 1 }, {
                     ui.input({
-                        key = "threshold-" .. preset.id,
-                        value = tostring(preset.threshold),
-                        onChange = function(value)
-                            local number = tonumber(value)
-                            if number ~= nil and math.floor(number) == number then
-                                preset.threshold = number
+                        key = `gesture-{axisName}-{field}-{preset.id}`,
+                        value = tostring(value),
+                        onChange = function(input)
+                            local number = tonumber(input)
+                            if number ~= nil and math.floor(number) == number and number >= minimum then
+                                local axis = if axisName == "shared" then preset else preset[axisName]
+                                axis[field] = number
                             end
                         end,
                     }),
                 }),
-                ui.column({ flexGrow = 1, gap = 4 }, {
-                    ui.label({ text = "Retrigger distance (device counts)" }),
-                    ui.input({
-                        key = "retrigger-distance-" .. preset.id,
-                        value = tostring(preset.retriggerDistance),
-                        onChange = function(value)
-                            local number = tonumber(value)
-                            if number ~= nil and math.floor(number) == number and number > 0 then
-                                preset.retriggerDistance = number
-                            end
-                        end,
-                    }),
-                }),
-                ui.column({ flexGrow = 1, gap = 4 }, {
-                    ui.label({ text = "Escalation per retrigger (device counts)" }),
-                    ui.input({
-                        key = "escalation-" .. preset.id,
-                        value = tostring(preset.escalation),
-                        onChange = function(value)
-                            local number = tonumber(value)
-                            if number ~= nil and math.floor(number) == number and number >= 0 then
-                                preset.escalation = number
-                            end
-                        end,
-                    }),
-                }),
+            }
+        end
+        local function add_axis_distances(axisName, title)
+            local values = if axisName == "shared" then preset else preset[axisName]
+            local controls = {
+                distance_control(axisName, "threshold", "Initial threshold (device counts)", values.threshold, 1),
+                distance_control(axisName, "retriggerDistance", "Retrigger distance (device counts)", values.retriggerDistance, 1),
+                distance_control(axisName, "escalation", "Escalation per retrigger (device counts)", values.escalation, 0),
+            }
+            local labels, inputs = {}, {}
+            for _, control in ipairs(controls) do
+                table.insert(labels, control.label)
+                table.insert(inputs, control.input)
+            end
+            local distanceFields = ui.column({ gap = 4 }, {
+                ui.row({ gap = 8 }, labels),
+                ui.row({ gap = 8 }, inputs),
+            })
+            if title ~= "" then
+                table.insert(gestureControls, ui.column({ gap = 5 }, {
+                    ui.label({ text = title, fontWeight = "semibold" }),
+                    distanceFields,
+                }))
+            else
+                table.insert(gestureControls, distanceFields)
+            end
+        end
+        if preset.separateAxisSettings then
+            add_axis_distances("xAxis", "Horizontal gestures (X)")
+            add_axis_distances("yAxis", "Vertical gestures (Y)")
+        else
+            add_axis_distances("shared", "")
+        end
+        table.insert(gestureControls, ui.label({
+            text = "Threshold triggers the first directional action. Retrigger distance is the movement needed between later actions. Escalation adds to that distance after each retrigger; 0 keeps each retrigger the same distance.",
+            color = "on_surface_variant",
+        }))
+        local windowSizeScalingOptions = {
+            { value = "disabled", label = "Disabled" },
+            { value = "threshold", label = "Adjust initial threshold" },
+            { value = "retrigger", label = "Adjust retrigger distance" },
+            { value = "all", label = "Adjust all" },
+        }
+        local windowSizeScalingIndex = 0
+        for index, option in ipairs(windowSizeScalingOptions) do
+            if option.value == preset.windowSizeScaling then
+                windowSizeScalingIndex = index - 1
+                break
+            end
+        end
+        table.insert(gestureControls, ui.column({ gap = 4 }, {
+            ui.label({ text = "Account for window dimensions" }),
+            ui.select({
+                key = "window-size-scaling-" .. preset.id,
+                options = {
+                    windowSizeScalingOptions[1].label,
+                    windowSizeScalingOptions[2].label,
+                    windowSizeScalingOptions[3].label,
+                    windowSizeScalingOptions[4].label,
+                },
+                selectedIndex = windowSizeScalingIndex,
+                onChange = function(value)
+                    local selected = tonumber(value)
+                    if selected == nil or selected < 0 or selected >= #windowSizeScalingOptions then
+                        message = "Could not select the window-dimension gesture behavior."
+                        render()
+                        return
+                    end
+                    preset.windowSizeScaling = windowSizeScalingOptions[selected + 1].value
+                    render()
+                end,
             }),
             ui.label({
-                text = "Threshold triggers the first directional action. Retrigger distance is the movement needed between later actions. Escalation adds to that distance after each retrigger; 0 keeps each retrigger the same distance. Retrigger distance defaults to the threshold.",
+                text = "Horizontal gesture distances scale by focused-window width ÷ output width; vertical distances scale by focused-window height ÷ output height. Retrigger scaling also scales escalation.",
                 color = "on_surface_variant",
             }),
-        }
+        }))
         local function tabs(entries, section, subgroup, labels)
             local buttons = {}
             for index, entry in ipairs(entries) do
@@ -1548,11 +1756,23 @@ local function button_rows(buttons, buttonsPerRow)
     return rows
 end
 
+local function copy_update_command(command)
+    if not noctalia.copyToClipboard(command, "text/plain") then
+        message = "Could not copy the command to the clipboard."
+        noctalia.notifyError("MX Mouse", message)
+        render()
+        return
+    end
+    copiedUpdateCommands[command] = true
+    message = "Command copied to the clipboard."
+    render()
+end
+
 render = function()
     if config == nil then
         load_config()
     end
-    if daemonInstalled ~= true or serviceEnabled ~= true then
+    if daemonInstalled ~= true or serviceEnabled ~= true or daemonNeedsUpdate or daemonVersionError ~= nil then
         local setupContent = {
             ui.row({ align = "center", gap = 10 }, {
                 ui.label({ text = "MX", fontSize = 22, fontWeight = "bold", color = "primary" }),
@@ -1562,45 +1782,136 @@ render = function()
                 }),
             }),
         }
-        local setupStatus = if daemonInstalled == nil
+        local setupStatus = if daemonVersionError ~= nil
+            then "Could not verify the required nnmxd version."
+            elseif daemonNeedsUpdate
+            then "nnmxd update required"
+            elseif daemonInstalled == nil
             then "Looking for nnmxd..."
             elseif daemonInstalled == true and serviceEnabled == nil
             then "Checking the nnmxd user service..."
+            elseif daemonInstalled == false and localBuildReady
+            then "Local nnmxd build found; configure the user service."
             elseif daemonInstalled == true
             then "The daemon is installed, but its user service is not enabled."
-            else "Install the local daemon to start configuring your mouse."
-        table.insert(setupContent, ui.column({ gap = 8, padding = 18, fill = "surface_container", radius = 16 }, {
-            ui.label({ text = setupStatus, fontSize = 17, fontWeight = "bold" }),
-            ui.label({
-                text = "The setup wizard clones nnmxd from GitHub, builds it on this machine, and installs it as a user service. It requires git, make, Go, and input-device permissions. No sudo is used.",
+            else "Install nnmxd manually to start configuring your mouse."
+        local setupDescription = ""
+        if daemonVersionError ~= nil then
+            setupDescription = daemonVersionError
+        elseif daemonNeedsUpdate then
+            setupDescription = ""
+        elseif daemonInstalled == false and localBuildReady then
+            setupDescription = `Local build {localBuildVersion} meets required nnmxd version {requiredDaemonVersion}. Configure the service to apply it.`
+        elseif daemonInstalled == false and localSourceAvailable then
+            setupDescription = "The nnmxd source is present. Review it and run its Makefile yourself. Afterward, this panel can install the local build and configure the service. The build requires Make, Go, and input-device permissions."
+        elseif daemonInstalled == false then
+            setupDescription = "Review the nnmxd source, clone it, and run its Makefile yourself. Afterward, this panel can install the local build and configure the service. The build requires Git, Make, Go, and input-device permissions."
+        elseif localBuildReady then
+            setupDescription = "The panel can install your local build and service unit, then reload the user service manager and enable and start nnmxd.service. No elevated privileges are used."
+        else
+            setupDescription = "The panel can reload the user service manager and enable and start nnmxd.service. No elevated privileges are used."
+        end
+        local setupCard = { ui.label({ text = setupStatus, fontSize = 17, fontWeight = "bold" }) }
+        if setupDescription ~= "" then
+            table.insert(setupCard, ui.label({
+                text = setupDescription,
                 color = "on_surface_variant",
-                maxLines = 4,
-            }),
-        }))
-        if daemonInstalled == false or serviceEnabled == false then
-            table.insert(setupContent, ui.row({ gap = 8 }, {
-                ui.button({
-                    text = if installing then installStep else "Install nnmxd",
-                    glyph = if installing then "loader" else "download",
-                    enabled = not installing,
-                    variant = "primary",
-                    onClick = install_nnmxd,
+                maxLines = 5,
+            }))
+        end
+        table.insert(setupContent, ui.column({
+            gap = 8, padding = 18, fill = "surface_container", radius = 16,
+        }, setupCard))
+        if daemonNeedsUpdate then
+            local updateCommands = if localSourceAvailable
+                then {
+                    "git -C ~/.local/src/nnmxd pull --ff-only",
+                    "make -C ~/.local/src/nnmxd build",
+                }
+                else {
+                    "mkdir -p ~/.local/src",
+                    "git clone https://github.com/uheplm/nnmxd.git ~/.local/src/nnmxd",
+                    "make -C ~/.local/src/nnmxd build",
+                }
+            local updateSummary = {
+                ui.label({ text = `Installed version: {daemonVersion}`, color = "on_surface_variant" }),
+                ui.label({ text = `Required version: {requiredDaemonVersion}`, color = "on_surface_variant" }),
+                ui.label({
+                    text = if localBuildReady
+                        then `Local build {localBuildVersion} is ready. Configure service to install and restart it.`
+                        else "Update the reviewed nnmxd source, then run each command below in order:",
+                    color = "on_surface_variant",
                 }),
-                ui.button({
-                    text = "Check again",
-                    glyph = "refresh",
-                    enabled = not installing,
-                    onClick = check_daemon,
+            }
+            table.insert(setupContent, ui.column({
+                gap = 6, padding = 12, fill = "surface_container_high", radius = 12,
+            }, updateSummary))
+            if not localBuildReady then
+                for _, command in ipairs(updateCommands) do
+                    table.insert(setupContent, ui.column({
+                        gap = 6, padding = 10, fill = "surface_container_high", radius = 12,
+                    }, {
+                        ui.row({ align = "center", gap = 8 }, {
+                            ui.label({
+                                text = command,
+                                fontFamily = "monospace",
+                                color = "on_surface_variant",
+                                flexGrow = 1,
+                            }),
+                            ui.button({
+                                glyph = if copiedUpdateCommands[command] then "check" else "copy",
+                                tooltip = if copiedUpdateCommands[command]
+                                    then "Copied to clipboard"
+                                    else "Copy this command",
+                                onClick = function()
+                                    copy_update_command(command)
+                                end,
+                            }),
+                        }),
+                    }))
+                end
+            end
+        end
+        if daemonInstalled == false and not daemonNeedsUpdate and not localBuildReady then
+            table.insert(setupContent, ui.column({ gap = 6, padding = 12, fill = "surface_container_high", radius = 12 }, {
+                ui.label({
+                    text = if localSourceAvailable
+                        then "Build the reviewed local source in a terminal:"
+                        else "Clone and build nnmxd in a terminal. Skip the clone command if you already have this checkout:",
+                    fontWeight = "semibold",
+                }),
+                ui.label({
+                    text = if localSourceAvailable
+                        then "git -C ~/.local/src/nnmxd pull --ff-only\nmake -C ~/.local/src/nnmxd build"
+                        else "mkdir -p ~/.local/src\ngit clone https://github.com/uheplm/nnmxd.git ~/.local/src/nnmxd\nmake -C ~/.local/src/nnmxd build",
+                    fontFamily = "monospace",
+                    color = "on_surface_variant",
                 }),
             }))
+        end
+        if daemonInstalled == false or serviceEnabled == false or daemonNeedsUpdate or daemonVersionError ~= nil
+            or daemonInstalled == nil
+        then
+            local setupButtons = {}
+            if localBuildReady or (daemonInstalled == true and serviceEnabled == false and not daemonNeedsUpdate) then
+                table.insert(setupButtons, ui.button({
+                    text = if configuringService then "Configuring service..." else "Configure service",
+                    glyph = if configuringService then "loader" else "play",
+                    enabled = not configuringService,
+                    variant = "primary",
+                    onClick = configure_service,
+                }))
+            end
+            table.insert(setupButtons, ui.button({
+                text = "Check again",
+                glyph = "refresh",
+                enabled = not configuringService,
+                onClick = check_daemon,
+            }))
+            table.insert(setupContent, ui.row({ gap = 8 }, setupButtons))
         end
         if message ~= "" then
             table.insert(setupContent, ui.label({ text = message, color = "on_surface_variant" }))
-        end
-        if installOutput ~= "" then
-            table.insert(setupContent, ui.scroll({ flexGrow = 1, gap = 4 }, {
-                ui.label({ text = installOutput, color = "on_surface_variant" }),
-            }))
         end
         panel.render(ui.column({ flexGrow = 1, gap = 14, padding = 18 }, setupContent))
         return

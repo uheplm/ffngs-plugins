@@ -421,6 +421,13 @@ run_control = function(action)
     if device == nil or busy then
         return
     end
+    if action == "volumeup" or action == "volumedown" then
+        noctalia.state.set("googlehome.suppressVolumeOsdUntil", os.time() + 8)
+    elseif action == "stop" or action == "play" or action == "pause"
+        or action == "previous" or action == "next"
+    then
+        noctalia.state.set("googlehome.suppressTrackOsdUntil", os.time() + 8)
+    end
     local command
     local timeout = 15000
     if action == "stop" or action == "play" or action == "pause" or action == "previous" or action == "next" then

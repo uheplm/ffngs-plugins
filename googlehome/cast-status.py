@@ -49,6 +49,7 @@ class StatusBridge:
             "content_type": "",
             "playback_rate": 1,
             "display_name": "",
+            "device_name": "",
             "status_text": "",
             "media_metadata": {},
             "icon_url": "",
@@ -119,7 +120,7 @@ class StatusBridge:
             })
         self.publish()
 
-    def read_settings(self) -> tuple[tuple[str, str, str, int] | None, int]:
+    def read_settings(self) -> tuple[tuple[str, str, str, str, int] | None, int]:
         try:
             settings = json.loads(self.settings_path.read_text(encoding="utf-8"))
         except FileNotFoundError:
@@ -150,7 +151,7 @@ class StatusBridge:
                 and not isinstance(port, bool)
                 and 1 <= port <= 65535
             ):
-                return (selected_uuid, host, model, port), poll_interval
+                return (selected_uuid, name, host, model, port), poll_interval
         return None, poll_interval
 
     def disconnect(self) -> None:
@@ -159,8 +160,8 @@ class StatusBridge:
         if cast is not None:
             cast.disconnect()
 
-    def connect_selection(self, selection: tuple[str, str, str, int] | None) -> None:
-        key = (selection[0], selection[1], selection[3]) if selection is not None else None
+    def connect_selection(self, selection: tuple[str, str, str, str, int] | None) -> None:
+        key = (selection[0], selection[2], selection[4]) if selection is not None else None
         if key == self.cast_key and (self.cast is not None or time.monotonic() < self.next_connect_attempt):
             return
         self.disconnect()
@@ -176,6 +177,7 @@ class StatusBridge:
                 "content_type": "",
                 "playback_rate": 1,
                 "display_name": "",
+                "device_name": selection[1] if selection is not None else "",
                 "status_text": "",
                 "media_metadata": {},
                 "icon_url": "",
@@ -183,7 +185,7 @@ class StatusBridge:
         self.publish()
         if selection is None:
             return
-        selected_uuid, host, model, port = selection
+        selected_uuid, _name, host, model, port = selection
         self.cast_key = key
         self.next_connect_attempt = time.monotonic() + 10
         cast = None

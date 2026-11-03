@@ -1,13 +1,20 @@
 id = "ffngs/mxmouse"
 name = "MX Mouse"
-version = "1.0.13"
+version = "1.0.21"
 plugin_api = 43
 author = "ffngs"
 license = "MIT"
 icon = "mouse"
 description = "Configure MX Master gestures and per-window presets for Niri."
-dependencies = ["niri"]
+dependencies = ["niri", "nnmxd", "noctalia", "install", "systemctl", "journalctl"]
 tags = ["niri", "utility", "panel", "bar"]
+
+[[setting]]
+key = "workspace_glyphs"
+type = "string"
+label_key = "settings.workspace_glyphs.label"
+description_key = "settings.workspace_glyphs.description"
+default = ""
 
 [[widget]]
 id = "modifier"
@@ -20,11 +27,207 @@ entry = "widget.luau"
   description_key = "settings.hide_when_off.description"
   default = true
 
+[[widget]]
+id = "profile"
+entry = "profile-widget.luau"
+
+[[widget]]
+id = "gesture-columns"
+entry = "gesture-map-widget.luau"
+
+  [[widget.setting]]
+  key = "axis"
+  type = "select"
+  label_key = "settings.gesture_map.axis.label"
+  default = "x"
+  options = [
+    { value = "x", label_key = "settings.gesture_map.axis.x" },
+    { value = "y", label_key = "settings.gesture_map.axis.y" },
+  ]
+
+  [[widget.setting]]
+  key = "layout"
+  type = "select"
+  label_key = "settings.gesture_map.layout.label"
+  default = "horizontal"
+  options = [
+    { value = "horizontal", label_key = "settings.gesture_map.layout.horizontal" },
+    { value = "vertical", label_key = "settings.gesture_map.layout.vertical" },
+  ]
+
+  [[widget.setting]]
+  key = "widget_width"
+  type = "int"
+  label_key = "settings.gesture_map.widget_width.label"
+  description_key = "settings.gesture_map.widget_width.description"
+  default = 190
+  min = 60
+  max = 600
+
+  [[widget.setting]]
+  key = "target_min_width_percent"
+  type = "int"
+  label_key = "settings.gesture_map.target_min_width_percent.label"
+  description_key = "settings.gesture_map.target_min_width_percent.description"
+  default = 10
+  min = 1
+  max = 50
+
+  [[widget.setting]]
+  key = "pill_radius"
+  type = "int"
+  label_key = "settings.gesture_map.pill_radius.label"
+  description_key = "settings.gesture_map.pill_radius.description"
+  default = 6
+  min = 0
+  max = 24
+
+  [[widget.setting]]
+  key = "icon_size_percent"
+  type = "int"
+  label_key = "settings.gesture_map.icon_size_percent.label"
+  description_key = "settings.gesture_map.icon_size_percent.description"
+  default = 70
+  min = 25
+  max = 150
+
+  [[widget.setting]]
+  key = "horizontal_pill_padding"
+  type = "int"
+  label_key = "settings.gesture_map.horizontal_pill_padding.label"
+  description_key = "settings.gesture_map.horizontal_pill_padding.description"
+  default = 2
+  min = 0
+  max = 16
+
+  [[widget.setting]]
+  key = "vertical_pill_padding"
+  type = "int"
+  label_key = "settings.gesture_map.vertical_pill_padding.label"
+  description_key = "settings.gesture_map.vertical_pill_padding.description"
+  default = 2
+  min = 0
+  max = 16
+
+  [[widget.setting]]
+  key = "progress_thickness_percent"
+  type = "int"
+  label_key = "settings.gesture_map.progress_thickness_percent.label"
+  description_key = "settings.gesture_map.progress_thickness_percent.description"
+  default = 40
+  min = 10
+  max = 100
+
+  [[widget.setting]]
+  key = "icon_progress_gap"
+  type = "int"
+  label_key = "settings.gesture_map.icon_progress_gap.label"
+  description_key = "settings.gesture_map.icon_progress_gap.description"
+  default = 3
+  min = 0
+  max = 24
+
+[[widget]]
+id = "gesture-workspaces"
+entry = "gesture-map-widget.luau"
+
+  [[widget.setting]]
+  key = "axis"
+  type = "select"
+  label_key = "settings.gesture_map.axis.label"
+  default = "y"
+  options = [
+    { value = "x", label_key = "settings.gesture_map.axis.x" },
+    { value = "y", label_key = "settings.gesture_map.axis.y" },
+  ]
+
+  [[widget.setting]]
+  key = "layout"
+  type = "select"
+  label_key = "settings.gesture_map.layout.label"
+  default = "vertical"
+  options = [
+    { value = "horizontal", label_key = "settings.gesture_map.layout.horizontal" },
+    { value = "vertical", label_key = "settings.gesture_map.layout.vertical" },
+  ]
+
+  [[widget.setting]]
+  key = "widget_width"
+  type = "int"
+  label_key = "settings.gesture_map.widget_width.label"
+  description_key = "settings.gesture_map.widget_width.description"
+  default = 190
+  min = 60
+  max = 600
+
+  [[widget.setting]]
+  key = "target_min_width_percent"
+  type = "int"
+  label_key = "settings.gesture_map.target_min_width_percent.label"
+  description_key = "settings.gesture_map.target_min_width_percent.description"
+  default = 10
+  min = 1
+  max = 50
+
+  [[widget.setting]]
+  key = "pill_radius"
+  type = "int"
+  label_key = "settings.gesture_map.pill_radius.label"
+  description_key = "settings.gesture_map.pill_radius.description"
+  default = 6
+  min = 0
+  max = 24
+
+  [[widget.setting]]
+  key = "icon_size_percent"
+  type = "int"
+  label_key = "settings.gesture_map.icon_size_percent.label"
+  description_key = "settings.gesture_map.icon_size_percent.description"
+  default = 70
+  min = 25
+  max = 150
+
+  [[widget.setting]]
+  key = "vertical_pill_padding"
+  type = "int"
+  label_key = "settings.gesture_map.vertical_pill_padding.label"
+  description_key = "settings.gesture_map.vertical_pill_padding.description"
+  default = 2
+  min = 0
+  max = 16
+
+  [[widget.setting]]
+  key = "horizontal_pill_padding"
+  type = "int"
+  label_key = "settings.gesture_map.horizontal_pill_padding.label"
+  description_key = "settings.gesture_map.horizontal_pill_padding.description"
+  default = 2
+  min = 0
+  max = 16
+
+  [[widget.setting]]
+  key = "progress_thickness_percent"
+  type = "int"
+  label_key = "settings.gesture_map.progress_thickness_percent.label"
+  description_key = "settings.gesture_map.progress_thickness_percent.description"
+  default = 40
+  min = 10
+  max = 100
+
+  [[widget.setting]]
+  key = "icon_progress_gap"
+  type = "int"
+  label_key = "settings.gesture_map.icon_progress_gap.label"
+  description_key = "settings.gesture_map.icon_progress_gap.description"
+  default = 3
+  min = 0
+  max = 24
+
 [[panel]]
 id = "manager"
 entry = "main.luau"
-width = 760
-height = 700
+width = 1200
+height = 800
 placement = "floating"
 position = "center"
 capture_keys = ["Escape"]

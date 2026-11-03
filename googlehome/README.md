@@ -32,10 +32,13 @@ noctalia msg panel-toggle ffngs/googlehome:remote
 | Setting | Default | Range | Description |
 | --- | ---: | ---: | --- |
 | Playback polling interval | 1 seconds | 1–60 seconds | Fallback status-check interval used in case a Cast event is missed. |
+| Volume change OSD | Enabled | — | Show a Noctalia OSD when speaker volume or mute state changes outside the plugin controls. |
+| Playback, track, or input change OSD | Enabled | — | Show a Noctalia OSD when playback starts or pauses, or when the current track or casting application changes outside the plugin controls. |
 
 ## Notes
 
 - Device discovery and volume commands use `catt`. Play/pause and previous/next actions use the small `cast-control.py` PyChromecast helper, which waits for an active media session before issuing the command. Play/pause is sent without waiting for the receiver's command acknowledgment, avoiding timeouts from apps that do not acknowledge those requests. `catt skip` jumps to the end of the current content rather than advancing the queue.
 - The `cast-status` service starts the persistent PyChromecast listener only while connected, and stops it on disconnect, plugin disable, or Noctalia shutdown. The listener writes snapshots to the plugin data directory; the service publishes changed snapshots to shared plugin state, which drives the widget and panel updates.
 - The player displays the largest image in `media_metadata.images`. Track title and artwork update with Cast media-status events; the configured interval provides a periodic fallback check.
+- Volume and playback/track/input OSDs are emitted by the background service for changes received from the Cast device, including changes made using the device or another controller. Playback OSDs also reflect play/pause transitions. OSDs are suppressed while the receiver is idle to avoid spurious legacy Chromecast volume updates. Volume OSD text includes the selected device name from the saved Cast selection. Plugin volume and playback controls suppress their corresponding OSD briefly to avoid duplicate feedback.
 - This plugin does not use Google account credentials or call cloud APIs directly.

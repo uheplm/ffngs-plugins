@@ -1,6 +1,6 @@
 id = "ffngs/googlehome"
 name = "Google Home"
-version = "1.0.34"
+version = "1.0.37"
 plugin_api = 43
 author = "ffngs"
 license = "MIT"
@@ -18,6 +18,20 @@ default = 1
 
 min = 1
 max = 60
+
+[[setting]]
+key = "volume_osd"
+type = "bool"
+label_key = "settings.volume_osd.label"
+description_key = "settings.volume_osd.description"
+default = true
+
+[[setting]]
+key = "track_osd"
+type = "bool"
+label_key = "settings.track_osd.label"
+description_key = "settings.track_osd.description"
+default = true
 
 [[panel]]
 id = "remote"

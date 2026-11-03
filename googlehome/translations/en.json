@@ -3,6 +3,14 @@
     "poll_interval": {
       "label": "Playback polling interval",
       "description": "How often playback status is checked, in seconds (1–60)."
+    },
+    "volume_osd": {
+      "label": "Volume change OSD",
+      "description": "Show a volume OSD when the connected Cast device's volume changes outside the plugin controls."
+    },
+    "track_osd": {
+      "label": "Playback, track, or input change OSD",
+      "description": "Show a media OSD when playback starts or pauses, or when the track or casting input changes outside the plugin controls."
     }
   }
 }

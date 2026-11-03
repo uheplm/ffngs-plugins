@@ -7,35 +7,38 @@ Configure Logitech MX Master 3/3S thumb-button gestures and per-window profiles 
 | Field | Value |
 | --- | --- |
 | ID | `ffngs/mxmouse` |
-| Entries | Panel: `manager`; bar widget: `modifier` |
+| Entries | Panel: `manager`; bar widgets: `modifier`, `gesture-columns`, `gesture-workspaces` |
 
 ## Requirements
 
 - Niri and `niri` on `PATH`. This plugin currently supports Niri for window focus and action dispatch.
-- Noctalia Shell, which hosts the settings panel, status display, and notifications.
-- The [`nnmxd` service](https://github.com/uheplm/nnmxd), required to read mouse input and apply profiles. Install it automatically with the panel's installation wizard or manually using the instructions in the [nnmxd README](https://github.com/uheplm/nnmxd#readme).
+- The `noctalia` CLI from Noctalia Shell, which hosts the settings panel, status display, and notifications.
+- The [`nnmxd` service](https://github.com/uheplm/nnmxd), required to read mouse input and apply profiles. Install it manually using the instructions below and in the [nnmxd README](https://github.com/uheplm/nnmxd#readme). MX Mouse checks the installed version against [`NNMXD_VERSION_TARGET`](./NNMXD_VERSION_TARGET) and notifies you when an update is required.
+- `install`, `systemctl`, and `journalctl` for installing the locally built service files, controlling the `nnmxd` user service, and viewing its logs.
 - A user systemd manager and access for your user to the mouse's evdev device and `/dev/uinput`. DPI control also needs access to the receiver's HID++ `/dev/hidraw*` node. See [nnmxd input permissions](https://github.com/uheplm/nnmxd#input-permissions).
 
 Other compositors and shells are not supported by this plugin. `nnmxd` can run with custom configuration and shell commands, but integrations other than Niri and Noctalia have not been implemented.
 
 ## Installation
 
-Install the plugin from the Noctalia community catalog. The panel checks whether `nnmxd` is installed and offers to install it if missing.
-
-The optional automatic installation wizard:
-
-1. Clones [`uheplm/nnmxd`](https://github.com/uheplm/nnmxd) to `~/.local/src/nnmxd`.
-2. Runs `make install` to build the service locally and install it to `~/.local/bin`.
-3. Installs, enables, and starts the `nnmxd.service` user unit.
-
-The wizard does not use `sudo`; Go downloads the build dependencies. Review the source and configure device permissions before starting the service.
-
-To install manually, follow the [nnmxd installation guide](https://github.com/uheplm/nnmxd#install):
+Install the plugin from the Noctalia community catalog. The plugin checks nnmxd's `--version` output against `NNMXD_VERSION_TARGET` and notifies you if it is missing or too old. The update notice lists the installed and required versions separately, displays each build command in its own card, and provides a copy button for each command. Review and run those commands in a terminal:
 
 ```sh
+mkdir -p ~/.local/src
 git clone https://github.com/uheplm/nnmxd.git ~/.local/src/nnmxd
-make -C ~/.local/src/nnmxd install
+make -C ~/.local/src/nnmxd build
 ```
+
+If you already cloned the repository to that location, update the reviewed checkout and build it:
+
+```sh
+git -C ~/.local/src/nnmxd pull --ff-only
+make -C ~/.local/src/nnmxd build
+```
+
+The manual build requires Git, Make, and Go. Review the [nnmxd source](https://github.com/uheplm/nnmxd) before building. Once the local build meets the target version, choose **Configure service** in the panel: it copies the built binary and service unit into your user directories, reloads systemd, enables and starts `nnmxd.service`, then restarts it to run the updated binary. This does not use elevated privileges. Configure device permissions before running the service.
+
+For alternative install methods and service details, see the [nnmxd installation guide](https://github.com/uheplm/nnmxd#install).
 
 ## Usage
 
@@ -48,6 +51,7 @@ noctalia msg panel-toggle ffngs/mxmouse:manager
 ### Overview
 
 - Shows service state, connected mouse, focused app, and its active profile.
+- The `gesture-columns` bar widget shows the tiled columns on the active workspace, with pills sized by their Niri tile widths and small app icons. `gesture-workspaces` shows every workspace on the output as equal-sized pills with a distinct name badge. The badge shows the uppercase first character of the workspace name (or its index when unnamed); optional name-to-glyph mappings can replace it, for example `Home=home, Work=briefcase`. Each pill lays out its icon or badge beside a direction-aligned progress strip: X fills left/right, while Y fills up/down. The progress strip is sized to fit alongside or below the icon/badge according to the selected widget layout. The focused pill follows gesture progress with responsive cubic easing and completes at the trigger threshold before the refreshed focus is rendered; when a gesture points beyond the first or last item, a short warning-orange marker indicates the blocked edge while the normal progress remains visible. Click a column pill to focus its representative window, or a workspace pill to switch workspaces. Both widgets require the nnmxd version listed in [`NNMXD_VERSION_TARGET`](./NNMXD_VERSION_TARGET).
 - Provides mouse-map shortcuts to the profile controls. The shortcuts open the corresponding section for the focused app's profile.
 - Includes controls to refresh the window list and restart the input service.
 
@@ -58,7 +62,7 @@ Profiles are selected based on the focused window's exact Niri `app_id`; windows
 Each profile has the following sections:
 
 - **Profile** — Set its name, glyph, mode, or make it the default profile.
-- **Gestures** — In Gesture mode, assign directional actions and a tap action. Movement threshold controls the first directional action; retrigger distance controls later actions, and escalation increases the distance after each retrigger.
+- **Gestures** — In Gesture mode, assign directional actions and a tap action. Movement threshold controls the first directional action; retrigger distance controls later actions, and escalation increases the distance after each retrigger. Choose shared distances or configure the threshold, retrigger distance, and escalation independently for horizontal (X) and vertical (Y) gestures. **Account for window dimensions** scales selected horizontal distances by focused-window width ÷ output width and vertical distances by focused-window height ÷ output height. The service tracks focus during a gesture and updates the multipliers as you switch between windows. This setting requires the nnmxd version listed in [`NNMXD_VERSION_TARGET`](./NNMXD_VERSION_TARGET).
 - **Thumb Chords** — Assign actions to thumb + left, middle, or right click. An assigned chord runs on click-down and consumes that click and release; an unassigned chord passes through as a normal click. Available in Gesture mode.
 - **Side buttons** — Assign actions to the back (`BTN_SIDE`) and front (`BTN_EXTRA`) side buttons. An assigned action runs on press; unassigned buttons pass through. Available in either profile mode. The under-wheel button is not configurable.
 - **Wheel actions** — Configure vertical scrollwheel actions while holding the thumb button, and thumbwheel left/right actions with independent bindings for normal use and while holding the thumb button. Unassigned thumbwheel directions preserve horizontal scrolling.
@@ -92,21 +96,15 @@ For the complete configuration schema, service lifecycle, runtime status fields,
 
 ## Settings
 
-The `modifier` bar widget can be configured to **Hide when inactive**. When visible, it shows `META` while a modifier is latched; clicking the widget opens the MX Mouse panel.
+The `modifier` bar widget can be configured to **Hide when inactive**. When visible, it shows `META` while a modifier is latched; clicking the widget opens the MX Mouse panel. Add the `profile` bar widget to show only the current profile's configured glyph. Configure **Workspace name-to-glyph mappings** in the plugin settings as comma-separated `name-or-index=glyph` pairs, such as `Home=home, 1=briefcase`; use glyph names supported by Noctalia. Name mappings take precedence over index mappings. Unmapped named workspaces show the uppercase first character of their name, and unnamed workspaces show their index. Add `gesture-columns` and/or `gesture-workspaces` to a bar to display the interactive X and Y maps separately. Each gesture map has an independent horizontal or vertical layout setting; horizontal layout uses a row arrangement, while vertical layout uses a column arrangement. The configured layout size is 60–600 px along the layout direction, and minimum target size (1–50% of that size) applies to pill width in horizontal layout or pill height in vertical layout. Other settings include pill corner radius (0–24 px), icon/index size (25–150% of the pill's smaller dimension), horizontal start/end and vertical top/bottom target-pill padding (0–16 px), progress thickness (10–100% of icon/index size), and icon-progress gap (0–24 px).
 
 ## Notes
 
 - `nnmxd` grabs the physical mouse while running and forwards ordinary pointer events through a virtual uinput clone. Gesture input is consumed while the thumb button is held.
 - DPI is set using the mouse's native HID++ adjustable-DPI feature; Solaar, LogiOps, and logid are not required. Device support varies, and onboard profile settings can override a host-set DPI.
 - The `modifier` widget reads the daemon's runtime status file. `nnmxd` itself has no Waybar-specific output or integration.
-- The service and action dispatch run locally. The automatic installer needs network access to clone the repository and download Go modules.
-
-## Development
-
-```sh
-make test
-make build
-```
+- The `gesture-columns` and `gesture-workspaces` widgets read gesture progress and trigger state from the daemon status file and Niri's window/workspace data.
+- The plugin does not clone or build nnmxd. It installs the binary and service unit from the local source/build paths after you build them yourself. The manual commands above require network access to clone the repository and download Go modules.
 
 ## License
 

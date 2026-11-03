@@ -3,6 +3,54 @@
     "hide_when_off": {
       "label": "Hide when inactive",
       "description": "Hide the modifier bar widget when no modifier key is latched."
+    },
+    "workspace_glyphs": {
+      "label": "Workspace name-to-glyph mappings",
+      "description": "Optional comma-separated mappings by workspace name or index, for example Home=home, 1=briefcase. Unmapped workspaces show the first letter of their name."
+    },
+    "gesture_map": {
+      "axis": {
+        "label": "Map axis",
+        "x": "X — columns",
+        "y": "Y — workspaces"
+      },
+      "layout": {
+        "label": "Widget layout",
+        "horizontal": "Horizontal",
+        "vertical": "Vertical"
+      },
+      "widget_width": {
+        "label": "Widget layout size",
+        "description": "Map size in pixels along its layout direction."
+      },
+      "target_min_width_percent": {
+        "label": "Target pill minimum size",
+        "description": "Minimum target pill width in horizontal layout or height in vertical layout, as a percentage of the configured widget layout size."
+      },
+      "pill_radius": {
+        "label": "Target pill corner radius",
+        "description": "Corner radius in pixels for each target pill."
+      },
+      "icon_size_percent": {
+        "label": "Icon size",
+        "description": "Icon or workspace index size as a percentage of the target pill's smaller dimension."
+      },
+      "horizontal_pill_padding": {
+        "label": "Horizontal target pill padding",
+        "description": "Inner padding in pixels at the start and end of each target pill."
+      },
+      "vertical_pill_padding": {
+        "label": "Vertical target pill padding",
+        "description": "Inner padding in pixels at the top and bottom of each target pill."
+      },
+      "progress_thickness_percent": {
+        "label": "Progress thickness",
+        "description": "Progress strip thickness as a percentage of the icon or index size."
+      },
+      "icon_progress_gap": {
+        "label": "Icon-progress gap",
+        "description": "Gap in pixels between the icon or index and the progress strip."
+      }
     }
   }
 }
