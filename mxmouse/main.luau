@@ -10,6 +10,7 @@ local DEFAULTS = {
         dpi = 0,
         verticalScroll = 100,
         horizontalScroll = 100,
+        horizontalScrollWindowWidthScaling = "disabled",
     },
     defaultPresetId = "default",
     presets = {
@@ -701,6 +702,11 @@ local function load_config()
     end
     if type(decoded.device.horizontalScroll) ~= "number" then
         decoded.device.horizontalScroll = 100
+    end
+    if decoded.device.horizontalScrollWindowWidthScaling ~= "direct"
+        and decoded.device.horizontalScrollWindowWidthScaling ~= "reverse"
+    then
+        decoded.device.horizontalScrollWindowWidthScaling = "disabled"
     end
     if type(decoded.applyGeneration) ~= "number"
         or decoded.applyGeneration % 1 ~= 0
@@ -2314,6 +2320,18 @@ render = function()
             table.insert(pageContent, row)
         end
     elseif activePage == "device" then
+        local horizontalWidthScalingOptions = {
+            { value = "disabled", label = "Disabled" },
+            { value = "direct", label = "Directly proportional (narrower window = slower scroll)" },
+            { value = "reverse", label = "Reverse proportional (narrower window = faster scroll)" },
+        }
+        local horizontalWidthScalingIndex = 0
+        for index, option in ipairs(horizontalWidthScalingOptions) do
+            if option.value == config.device.horizontalScrollWindowWidthScaling then
+                horizontalWidthScalingIndex = index - 1
+                break
+            end
+        end
         table.insert(pageContent, ui.column({ gap = 12, padding = 16, fill = "surface_container", radius = 14 }, {
             ui.column({ gap = 3 }, {
                 ui.label({ text = "Input device", fontSize = 16, fontWeight = "bold" }),
@@ -2395,6 +2413,33 @@ render = function()
                             horizontalScrollInput = value
                         end,
                     }),
+                }),
+            }),
+            ui.column({ gap = 4 }, {
+                ui.label({ text = "Modify horizontal scroll by window's relative width" }),
+                ui.select({
+                    key = "horizontal-scroll-window-width-scaling",
+                    options = {
+                        horizontalWidthScalingOptions[1].label,
+                        horizontalWidthScalingOptions[2].label,
+                        horizontalWidthScalingOptions[3].label,
+                    },
+                    selectedIndex = horizontalWidthScalingIndex,
+                    onChange = function(value)
+                        local selected = tonumber(value)
+                        if selected == nil or selected < 0 or selected >= #horizontalWidthScalingOptions then
+                            message = "Could not select the horizontal scroll width behavior."
+                            render()
+                            return
+                        end
+                        config.device.horizontalScrollWindowWidthScaling =
+                            horizontalWidthScalingOptions[selected + 1].value
+                        render()
+                    end,
+                }),
+                ui.label({
+                    text = "Relative width is focused-window width ÷ output width. The selected behavior modifies the horizontal scroll multiplier for all profiles.",
+                    color = "on_surface_variant",
                 }),
             }),
             ui.label({ text = "Scroll scales range from 10% to 500%. Standard and high-resolution wheel events are scaled on their matching axis.", color = "on_surface_variant" }),

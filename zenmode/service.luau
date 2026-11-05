@@ -42,6 +42,11 @@ local barNames = configuredBarNames()
 local dataPath = nil
 local pluginDir = nil
 local zenWindows = {}
+local autoZenWindows = {}
+local autoZenExclusions = {}
+local autoZenAppIdPatterns = namesFromSetting(noctalia.getConfig("auto_zen_app_ids"))
+local autoZenTitlePatterns = namesFromSetting(noctalia.getConfig("auto_zen_titles"))
+local invalidPatternReports = {}
 local barModes = {}
 local transitioning = {}
 local transitionRefreshPending = {}
@@ -60,6 +65,30 @@ local function reportError(message)
     noctalia.notifyError("Zen Mode", message)
 end
 
+local function windowIsZen(windowId)
+    return zenWindows[windowId] == true
+        or (autoZenWindows[windowId] == true and autoZenExclusions[windowId] ~= true)
+end
+
+local function matchesAnyPattern(value, patterns, settingName)
+    if type(value) ~= "string" then
+        return false
+    end
+    for _, pattern in ipairs(patterns) do
+        local ok, startIndex = pcall(string.find, value, pattern)
+        if not ok then
+            local key = settingName .. "\0" .. pattern
+            if not invalidPatternReports[key] then
+                invalidPatternReports[key] = true
+                reportError(`Invalid Lua pattern "{pattern}" in {settingName}.`)
+            end
+        elseif startIndex ~= nil then
+            return true
+        end
+    end
+    return false
+end
+
 local function saveState()
     if dataPath == nil then
         reportError("Could not locate Zen Mode plugin data.")
@@ -72,15 +101,19 @@ local function saveState()
     end
     table.sort(windowIds)
 
+    local excludedWindowIds = {}
+    for windowId in pairs(autoZenExclusions) do
+        table.insert(excludedWindowIds, windowId)
+    end
+    table.sort(excludedWindowIds)
+
     local bars = {}
     for barName, outputs in pairs(barModes) do
-        for output, state in pairs(outputs) do
+        for output in pairs(outputs) do
             table.insert(bars, {
                 bar = barName,
                 output = output,
-                zen = state.zen == true,
-                reserveSpace = state.reserveSpace == true,
-                normalReserveSpace = state.normalReserveSpace == true,
+                zen = true,
             })
         end
     end
@@ -93,6 +126,7 @@ local function saveState()
 
     local encoded, encodeError = noctalia.json.encode({
         windows = windowIds,
+        autoZenExclusions = excludedWindowIds,
         bars = bars,
     }, true)
     if type(encoded) ~= "string" then
@@ -117,6 +151,17 @@ local function connectedOutputs()
         end
     end
     return outputs, connected
+end
+
+local function clearBarMode(barName, output)
+    local outputs = barModes[barName]
+    if outputs == nil then
+        return
+    end
+    outputs[output] = nil
+    if next(outputs) == nil then
+        barModes[barName] = nil
+    end
 end
 
 local function clearBarTransitions(barName)
@@ -225,18 +270,7 @@ local function loadState()
                     local state = noctalia.string.trim(legacyBarState)
                     if state == "zen" then
                         barModes.TopBar = barModes.TopBar or {}
-                        barModes.TopBar[output.name] = {
-                            zen = true,
-                            reserveSpace = false,
-                            normalReserveSpace = true,
-                        }
-                    elseif state == "normal" then
-                        barModes.TopBar = barModes.TopBar or {}
-                        barModes.TopBar[output.name] = {
-                            zen = false,
-                            reserveSpace = true,
-                            normalReserveSpace = true,
-                        }
+                        barModes.TopBar[output.name] = true
                     end
                 end
             end
@@ -264,29 +298,24 @@ local function loadState()
             end
         end
     end
+    if type(state.autoZenExclusions) == "table" then
+        for _, windowId in ipairs(state.autoZenExclusions) do
+            if type(windowId) == "number" then
+                autoZenExclusions[windowId] = true
+            end
+        end
+    end
     if type(state.bars) == "table" then
         for _, bar in ipairs(state.bars) do
             if type(bar) == "table"
                 and type(bar.output) == "string"
-                and type(bar.zen) == "boolean"
+                and bar.zen == true
             then
                 local barName = if type(bar.bar) == "string" and bar.bar ~= ""
                     then bar.bar
                     else "TopBar"
-                local normalReserveSpace = bar.normalReserveSpace
-                if type(normalReserveSpace) ~= "boolean" then
-                    normalReserveSpace = true
-                end
-                local reserveSpace = bar.reserveSpace
-                if type(reserveSpace) ~= "boolean" then
-                    reserveSpace = normalReserveSpace ~= (bar.reserveToggled == true)
-                end
                 barModes[barName] = barModes[barName] or {}
-                barModes[barName][bar.output] = {
-                    zen = bar.zen,
-                    reserveSpace = reserveSpace,
-                    normalReserveSpace = normalReserveSpace,
-                }
+                barModes[barName][bar.output] = true
             end
         end
     end
@@ -370,13 +399,12 @@ local function configuredBarDefaults(output)
 
     return {
         autoHide = type(displayMode) == "string" and displayMode ~= "always_visible",
-        reserveSpace = true,
     }
 end
 
-local function barCommands(barName, output, zen, toggleReserve, defaults)
+local function barCommands(barName, output, zen, defaults)
     defaults = defaults or configuredBarDefaults(output)
-    local commands = {
+    return {
         {
             "noctalia", "msg", "bar-auto-hide-set",
             if zen then "on" else if defaults.autoHide then "on" else "off",
@@ -387,14 +415,32 @@ local function barCommands(barName, output, zen, toggleReserve, defaults)
             if zen then "overlay" else "top",
             barName, output,
         },
+        {
+            "noctalia", "msg", "bar-reserve-set",
+            if zen then "off" else "on",
+            barName, output,
+        },
     }
+end
 
-    if toggleReserve then
-        table.insert(commands, {
-            "noctalia", "msg", "bar-reserve-toggle", barName, output,
-        })
+local function maximizeWindow(windowId)
+    local started = noctalia.runAsync({
+        "niri",
+        "msg",
+        "action",
+        "maximize-window-to-edges",
+        "--id",
+        tostring(windowId),
+    }, function(result)
+        if result.timedOut or result.exitCode ~= 0 then
+            local detail = result.stderr ~= "" and result.stderr
+                or `exit status {result.exitCode}`
+            reportError(`Could not maximize window {windowId}: {detail}`)
+        end
+    end, 5000)
+    if not started then
+        reportError(`Could not start Niri to maximize window {windowId}.`)
     end
-    return commands
 end
 
 local function applyBarMode(barName, output, shouldBeZen, defaults)
@@ -416,19 +462,8 @@ local function applyBarMode(barName, output, shouldBeZen, defaults)
         return
     end
 
-    local normalReserveSpace = if previous == nil or not previous.zen
-        then defaults.reserveSpace
-        else previous.normalReserveSpace
-    local currentReserveSpace = if previous == nil
-        then normalReserveSpace
-        else previous.reserveSpace
-    local desiredReserveSpace = if shouldBeZen then false else normalReserveSpace
-    local toggleReserve = currentReserveSpace ~= desiredReserveSpace
-    local stateChanged = previous == nil
-        or previous.zen ~= shouldBeZen
-        or previous.reserveSpace ~= desiredReserveSpace
-        or previous.normalReserveSpace ~= normalReserveSpace
-    local commands = barCommands(barName, output, shouldBeZen, toggleReserve, defaults)
+    local stateChanged = (previous ~= nil) ~= shouldBeZen
+    local commands = barCommands(barName, output, shouldBeZen, defaults)
     nextTransitionToken += 1
     local transitionToken = nextTransitionToken
     local outputGeneration = outputGenerations[output] or 0
@@ -456,12 +491,12 @@ local function applyBarMode(barName, output, shouldBeZen, defaults)
         if not ok then
             reportError(`Could not update bar "{barName}" on {output}: {detail}`)
         else
-            barModes[barName] = barModes[barName] or {}
-            barModes[barName][output] = {
-                zen = shouldBeZen,
-                reserveSpace = desiredReserveSpace,
-                normalReserveSpace = normalReserveSpace,
-            }
+            if shouldBeZen then
+                barModes[barName] = barModes[barName] or {}
+                barModes[barName][output] = true
+            else
+                clearBarMode(barName, output)
+            end
             if stateChanged then
                 saveState()
             end
@@ -496,6 +531,18 @@ local function updateFromNiri(windows, workspaces)
     for _, window in ipairs(windows) do
         if type(window) == "table" and type(window.id) == "number" then
             liveWindows[window.id] = true
+            if not autoZenExclusions[window.id]
+                and (
+                    matchesAnyPattern(window.app_id, autoZenAppIdPatterns, "auto_zen_app_ids")
+                    or matchesAnyPattern(window.title, autoZenTitlePatterns, "auto_zen_titles")
+                )
+            then
+                local wasAutoZen = autoZenWindows[window.id] == true
+                autoZenWindows[window.id] = true
+                if not zenWindows[window.id] and not wasAutoZen then
+                    maximizeWindow(window.id)
+                end
+            end
             if window.is_focused == true then
                 focusedWindowId = window.id
                 local output = if type(window.workspace_id) == "number"
@@ -514,6 +561,17 @@ local function updateFromNiri(windows, workspaces)
             removedStaleWindow = true
         end
     end
+    for windowId in pairs(autoZenWindows) do
+        if not liveWindows[windowId] then
+            autoZenWindows[windowId] = nil
+        end
+    end
+    for windowId in pairs(autoZenExclusions) do
+        if not liveWindows[windowId] then
+            autoZenExclusions[windowId] = nil
+            removedStaleWindow = true
+        end
+    end
     if removedStaleWindow then
         saveState()
     end
@@ -524,7 +582,7 @@ local function updateFromNiri(windows, workspaces)
     for _, output in ipairs(outputs) do
         if type(output.name) == "string" and output.name ~= "" then
             local activeWindowId = activeWindowByOutput[output.name]
-            local isZen = activeWindowId ~= nil and zenWindows[activeWindowId] == true
+            local isZen = activeWindowId ~= nil and windowIsZen(activeWindowId)
             noctalia.state.set("zenmode.output." .. output.name, isZen)
             local defaults = configuredBarDefaults(output.name)
             for _, barName in ipairs(barNames) do
@@ -621,35 +679,30 @@ function requestRefresh(action, output)
                     if targetWindowId == nil then
                         reportError("Cannot change Zen Mode without a focused window.")
                     else
-                        local currentlyZen = zenWindows[targetWindowId] == true
+                        local currentlyZen = windowIsZen(targetWindowId)
                         if queuedAction.action == "toggle" then
-                            zenWindows[targetWindowId] = if currentlyZen then nil else true
+                            if currentlyZen then
+                                zenWindows[targetWindowId] = nil
+                                if autoZenWindows[targetWindowId] then
+                                    autoZenExclusions[targetWindowId] = true
+                                end
+                            else
+                                zenWindows[targetWindowId] = true
+                                autoZenExclusions[targetWindowId] = nil
+                            end
                             changedWindowIds[targetWindowId] = true
                         elseif queuedAction.action == "exit" and currentlyZen then
                             zenWindows[targetWindowId] = nil
+                            if autoZenWindows[targetWindowId] then
+                                autoZenExclusions[targetWindowId] = true
+                            end
                             changedWindowIds[targetWindowId] = true
                         end
                     end
                 end
 
                 for windowId in pairs(changedWindowIds) do
-                    local maximizeStarted = noctalia.runAsync({
-                        "niri",
-                        "msg",
-                        "action",
-                        "maximize-window-to-edges",
-                        "--id",
-                        tostring(windowId),
-                    }, function(result)
-                        if result.timedOut or result.exitCode ~= 0 then
-                            local detail = result.stderr ~= "" and result.stderr
-                                or `exit status {result.exitCode}`
-                            reportError(`Could not maximize window {windowId}: {detail}`)
-                        end
-                    end, 5000)
-                    if not maximizeStarted then
-                        reportError(`Could not start Niri to maximize window {windowId}.`)
-                    end
+                    maximizeWindow(windowId)
                 end
 
                 if next(changedWindowIds) ~= nil then
@@ -690,39 +743,27 @@ local function restoreAllBars()
     dropUnavailableBars()
     dropDisconnectedOutputs()
     for barName, outputs in pairs(barModes) do
-        for output, state in pairs(outputs) do
-            if state.zen then
-                local _, connected = connectedOutputs()
-                local _, available = availableBarNames()
-                if not connected[output] or (available ~= nil and not available[barName]) then
-                    continue
-                end
-                local commands = barCommands(
-                    barName,
-                    output,
-                    false,
-                    state.reserveSpace ~= state.normalReserveSpace,
-                    nil
-                )
-                runCommands(commands, 1, function(ok, detail)
-                    local _, stillConnected = connectedOutputs()
-                    local _, stillAvailable = availableBarNames()
-                    if not stillConnected[output]
-                        or (stillAvailable ~= nil and not stillAvailable[barName])
-                    then
-                        return
-                    elseif not ok then
-                        reportError(`Could not restore bar "{barName}" on {output}: {detail}`)
-                    else
-                        barModes[barName][output] = {
-                            zen = false,
-                            reserveSpace = state.normalReserveSpace,
-                            normalReserveSpace = state.normalReserveSpace,
-                        }
-                        saveState()
-                    end
-                end)
+        for output in pairs(outputs) do
+            local _, connected = connectedOutputs()
+            local _, available = availableBarNames()
+            if not connected[output] or (available ~= nil and not available[barName]) then
+                continue
             end
+            local commands = barCommands(barName, output, false)
+            runCommands(commands, 1, function(ok, detail)
+                local _, stillConnected = connectedOutputs()
+                local _, stillAvailable = availableBarNames()
+                if not stillConnected[output]
+                    or (stillAvailable ~= nil and not stillAvailable[barName])
+                then
+                    return
+                elseif not ok then
+                    reportError(`Could not restore bar "{barName}" on {output}: {detail}`)
+                else
+                    clearBarMode(barName, output)
+                    saveState()
+                end
+            end)
         end
     end
 end
@@ -737,14 +778,8 @@ local function restoreUnconfiguredBars()
 
     for barName, outputs in pairs(barModes) do
         if not selected[barName] then
-            for output, state in pairs(outputs) do
-                local commands = barCommands(
-                    barName,
-                    output,
-                    false,
-                    state.reserveSpace ~= state.normalReserveSpace,
-                    nil
-                )
+            for output in pairs(outputs) do
+                local commands = barCommands(barName, output, false)
                 runCommands(commands, 1, function(ok, detail)
                     local _, connected = connectedOutputs()
                     local _, available = availableBarNames()
@@ -753,10 +788,7 @@ local function restoreUnconfiguredBars()
                     elseif not ok then
                         reportError(`Could not restore unselected bar "{barName}" on {output}: {detail}`)
                     else
-                        barModes[barName][output] = nil
-                        if next(barModes[barName]) == nil then
-                            barModes[barName] = nil
-                        end
+                        clearBarMode(barName, output)
                         saveState()
                     end
                 end)
@@ -795,53 +827,6 @@ function onIpc(event, _payload)
         requestRefresh("exit", _payload)
     elseif event == "reconcile" then
         requestRefresh()
-    elseif event == "reserve-enabled" or event == "reserve-disabled" then
-        if type(_payload) ~= "string" or _payload == "" then
-            reportError("Reservation recovery requires an output name as its payload.")
-            return
-        end
-
-        local barName, output = string.match(_payload, "^([^|]+)|(.+)$")
-        local targetBars = {}
-        if barName ~= nil and output ~= nil then
-            table.insert(targetBars, barName)
-        else
-            output = _payload
-            targetBars = barNames
-        end
-        if output == "" then
-            reportError("Reservation recovery requires a non-empty output name.")
-            return
-        end
-        local _, connected = connectedOutputs()
-        if not connected[output] then
-            reportError(`Cannot update reserve-space state for disconnected output {output}.`)
-            return
-        end
-        local _, available = availableBarNames()
-        if barName ~= nil and available ~= nil and not available[barName] then
-            reportError(`Cannot update reserve-space state for unknown bar {barName}.`)
-            return
-        end
-
-        for _, targetBar in ipairs(targetBars) do
-            local outputs = barModes[targetBar]
-            local previous = if outputs then outputs[output] else nil
-            local zen = if previous ~= nil
-                then previous.zen
-                else noctalia.state.get("zenmode.output." .. output) == true
-            local normalReserveSpace = if previous ~= nil
-                then previous.normalReserveSpace
-                else configuredBarDefaults(output).reserveSpace
-            barModes[targetBar] = barModes[targetBar] or {}
-            barModes[targetBar][output] = {
-                zen = zen,
-                reserveSpace = event == "reserve-enabled",
-                normalReserveSpace = normalReserveSpace,
-            }
-        end
-        saveState()
-        requestRefresh()
     elseif event == "listener-error" then
         reportError("The Niri event listener stopped unexpectedly.")
     end
@@ -850,6 +835,8 @@ end
 function onConfigChanged()
     dropDisconnectedOutputs()
     dropUnavailableBars()
+    autoZenAppIdPatterns = namesFromSetting(noctalia.getConfig("auto_zen_app_ids"))
+    autoZenTitlePatterns = namesFromSetting(noctalia.getConfig("auto_zen_titles"))
     local previousNames = barNames
     barNames = configuredBarNames()
     local currentNames = {}
@@ -860,14 +847,8 @@ function onConfigChanged()
     for _, name in ipairs(previousNames) do
         if not currentNames[name] and barModes[name] ~= nil then
             local outputs = barModes[name]
-            for output, state in pairs(outputs) do
-                local commands = barCommands(
-                    name,
-                    output,
-                    false,
-                    state.reserveSpace ~= state.normalReserveSpace,
-                    nil
-                )
+            for output in pairs(outputs) do
+                local commands = barCommands(name, output, false)
                 runCommands(commands, 1, function(ok, detail)
                     local _, connected = connectedOutputs()
                     local _, available = availableBarNames()
@@ -876,10 +857,7 @@ function onConfigChanged()
                     elseif not ok then
                         reportError(`Could not restore removed bar "{name}" on {output}: {detail}`)
                     else
-                        barModes[name][output] = nil
-                        if next(barModes[name]) == nil then
-                            barModes[name] = nil
-                        end
+                        clearBarMode(name, output)
                         saveState()
                     end
                 end)

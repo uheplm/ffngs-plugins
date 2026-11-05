@@ -16,6 +16,20 @@ label_key = "settings.bar_names.label"
 description_key = "settings.bar_names.description"
 default = []
 
+[[setting]]
+key = "auto_zen_app_ids"
+type = "string_list"
+label_key = "settings.auto_zen_app_ids.label"
+description_key = "settings.auto_zen_app_ids.description"
+default = []
+
+[[setting]]
+key = "auto_zen_titles"
+type = "string_list"
+label_key = "settings.auto_zen_titles.label"
+description_key = "settings.auto_zen_titles.description"
+default = []
+
 [[widget]]
 id = "zen"
 entry = "widget.luau"

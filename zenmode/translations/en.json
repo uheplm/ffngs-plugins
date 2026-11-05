@@ -4,6 +4,14 @@
       "label": "Target bars",
       "description": "Bars to manage. Leave empty to follow Noctalia's configured bar order, or specify one or more names."
     },
+    "auto_zen_app_ids": {
+      "label": "Auto Zen app IDs",
+      "description": "Lua patterns for window app IDs to start in Zen Mode. Any match enables Zen; leave empty to disable."
+    },
+    "auto_zen_titles": {
+      "label": "Auto Zen titles",
+      "description": "Lua patterns for window titles to start in Zen Mode. Any match enables Zen; leave empty to disable."
+    },
     "toggle_zen": {
       "label": "Toggle zen",
       "description": "Keep the widget visible and let it toggle the focused window into or out of Zen Mode."

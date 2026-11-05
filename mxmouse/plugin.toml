@@ -56,6 +56,136 @@ entry = "gesture-map-widget.luau"
   ]
 
   [[widget.setting]]
+  key = "show_progress_when_inactive"
+  type = "bool"
+  label_key = "settings.gesture_map.show_progress_when_inactive.label"
+  description_key = "settings.gesture_map.show_progress_when_inactive.description"
+  default = true
+
+  [[widget.setting]]
+  key = "shrink_inactive_workspace_pills"
+  type = "bool"
+  label_key = "settings.gesture_map.shrink_inactive_workspace_pills.label"
+  description_key = "settings.gesture_map.shrink_inactive_workspace_pills.description"
+  default = false
+
+  [[widget.setting]]
+  key = "workspace_pill_width"
+  type = "int"
+  label_key = "settings.gesture_map.workspace_pill_width.label"
+  description_key = "settings.gesture_map.workspace_pill_width.description"
+  default = 28
+  min = 16
+  max = 200
+
+  [[widget.setting]]
+  key = "workspace_pill_height"
+  type = "int"
+  label_key = "settings.gesture_map.workspace_pill_height.label"
+  description_key = "settings.gesture_map.workspace_pill_height.description"
+  default = 40
+  min = 16
+  max = 200
+
+  [[widget.setting]]
+  key = "animate_workspace_pill_resizing"
+  type = "bool"
+  label_key = "settings.gesture_map.animate_workspace_pill_resizing.label"
+  description_key = "settings.gesture_map.animate_workspace_pill_resizing.description"
+  default = true
+
+  [[widget.setting]]
+  key = "workspace_pill_resize_duration"
+  type = "int"
+  label_key = "settings.gesture_map.workspace_pill_resize_duration.label"
+  description_key = "settings.gesture_map.workspace_pill_resize_duration.description"
+  default = 280
+  min = 100
+  max = 1000
+
+  [[widget.setting]]
+  key = "open_launcher_on_empty_workspace"
+  type = "bool"
+  label_key = "settings.gesture_map.open_launcher_on_empty_workspace.label"
+  description_key = "settings.gesture_map.open_launcher_on_empty_workspace.description"
+  default = false
+
+  [[widget.setting]]
+  key = "launcher_opening_command"
+  type = "string"
+  label_key = "settings.gesture_map.launcher_opening_command.label"
+  description_key = "settings.gesture_map.launcher_opening_command.description"
+  default = "noctalia msg panel-open launcher"
+
+  [[widget.setting]]
+  key = "open_launcher_on_focus"
+  type = "bool"
+  label_key = "settings.gesture_map.open_launcher_on_focus.label"
+  description_key = "settings.gesture_map.open_launcher_on_focus.description"
+  default = false
+
+  [[widget.setting]]
+  key = "close_launcher_leaving_empty_workspace"
+  type = "bool"
+  label_key = "settings.gesture_map.close_launcher_leaving_empty_workspace.label"
+  description_key = "settings.gesture_map.close_launcher_leaving_empty_workspace.description"
+  default = false
+
+  [[widget.setting]]
+  key = "open_launcher_at_workspace_edge"
+  type = "bool"
+  label_key = "settings.gesture_map.open_launcher_at_workspace_edge.label"
+  description_key = "settings.gesture_map.open_launcher_at_workspace_edge.description"
+  default = false
+
+  [[widget.setting]]
+  key = "launcher_workspace_edge"
+  type = "select"
+  label_key = "settings.gesture_map.launcher_workspace_edge.label"
+  default = "end"
+  options = [
+    { value = "start", label_key = "settings.gesture_map.launcher_workspace_edge.start" },
+    { value = "end", label_key = "settings.gesture_map.launcher_workspace_edge.end" },
+  ]
+
+  [[widget.setting]]
+  key = "launcher_glyph"
+  type = "string"
+  label_key = "settings.gesture_map.launcher_glyph.label"
+  description_key = "settings.gesture_map.launcher_glyph.description"
+  default = "apps"
+
+  [[widget.setting]]
+  key = "dominant_axis_progress"
+  type = "bool"
+  label_key = "settings.gesture_map.dominant_axis_progress.label"
+  description_key = "settings.gesture_map.dominant_axis_progress.description"
+  default = false
+
+  [[widget.setting]]
+  key = "dynamic_progress_opacity"
+  type = "bool"
+  label_key = "settings.gesture_map.dynamic_progress_opacity.label"
+  description_key = "settings.gesture_map.dynamic_progress_opacity.description"
+  default = false
+
+  [[widget.setting]]
+  key = "hide_empty_workspaces"
+  type = "bool"
+  label_key = "settings.gesture_map.hide_empty_workspaces.label"
+  description_key = "settings.gesture_map.hide_empty_workspaces.description"
+  default = false
+
+  [[widget.setting]]
+  key = "workspace_badge_radius"
+  type = "int"
+  label_key = "settings.gesture_map.workspace_badge_radius.label"
+  description_key = "settings.gesture_map.workspace_badge_radius.description"
+  default = 6
+  min = 0
+  max = 24
+
+  [[widget.setting]]
   key = "widget_width"
   type = "int"
   label_key = "settings.gesture_map.widget_width.label"
@@ -150,6 +280,136 @@ entry = "gesture-map-widget.luau"
     { value = "horizontal", label_key = "settings.gesture_map.layout.horizontal" },
     { value = "vertical", label_key = "settings.gesture_map.layout.vertical" },
   ]
+
+  [[widget.setting]]
+  key = "show_progress_when_inactive"
+  type = "bool"
+  label_key = "settings.gesture_map.show_progress_when_inactive.label"
+  description_key = "settings.gesture_map.show_progress_when_inactive.description"
+  default = true
+
+  [[widget.setting]]
+  key = "shrink_inactive_workspace_pills"
+  type = "bool"
+  label_key = "settings.gesture_map.shrink_inactive_workspace_pills.label"
+  description_key = "settings.gesture_map.shrink_inactive_workspace_pills.description"
+  default = false
+
+  [[widget.setting]]
+  key = "workspace_pill_width"
+  type = "int"
+  label_key = "settings.gesture_map.workspace_pill_width.label"
+  description_key = "settings.gesture_map.workspace_pill_width.description"
+  default = 28
+  min = 16
+  max = 200
+
+  [[widget.setting]]
+  key = "workspace_pill_height"
+  type = "int"
+  label_key = "settings.gesture_map.workspace_pill_height.label"
+  description_key = "settings.gesture_map.workspace_pill_height.description"
+  default = 40
+  min = 16
+  max = 200
+
+  [[widget.setting]]
+  key = "animate_workspace_pill_resizing"
+  type = "bool"
+  label_key = "settings.gesture_map.animate_workspace_pill_resizing.label"
+  description_key = "settings.gesture_map.animate_workspace_pill_resizing.description"
+  default = true
+
+  [[widget.setting]]
+  key = "workspace_pill_resize_duration"
+  type = "int"
+  label_key = "settings.gesture_map.workspace_pill_resize_duration.label"
+  description_key = "settings.gesture_map.workspace_pill_resize_duration.description"
+  default = 280
+  min = 100
+  max = 1000
+
+  [[widget.setting]]
+  key = "open_launcher_on_empty_workspace"
+  type = "bool"
+  label_key = "settings.gesture_map.open_launcher_on_empty_workspace.label"
+  description_key = "settings.gesture_map.open_launcher_on_empty_workspace.description"
+  default = false
+
+  [[widget.setting]]
+  key = "launcher_opening_command"
+  type = "string"
+  label_key = "settings.gesture_map.launcher_opening_command.label"
+  description_key = "settings.gesture_map.launcher_opening_command.description"
+  default = "noctalia msg panel-open launcher"
+
+  [[widget.setting]]
+  key = "open_launcher_on_focus"
+  type = "bool"
+  label_key = "settings.gesture_map.open_launcher_on_focus.label"
+  description_key = "settings.gesture_map.open_launcher_on_focus.description"
+  default = false
+
+  [[widget.setting]]
+  key = "close_launcher_leaving_empty_workspace"
+  type = "bool"
+  label_key = "settings.gesture_map.close_launcher_leaving_empty_workspace.label"
+  description_key = "settings.gesture_map.close_launcher_leaving_empty_workspace.description"
+  default = false
+
+  [[widget.setting]]
+  key = "open_launcher_at_workspace_edge"
+  type = "bool"
+  label_key = "settings.gesture_map.open_launcher_at_workspace_edge.label"
+  description_key = "settings.gesture_map.open_launcher_at_workspace_edge.description"
+  default = false
+
+  [[widget.setting]]
+  key = "launcher_workspace_edge"
+  type = "select"
+  label_key = "settings.gesture_map.launcher_workspace_edge.label"
+  default = "end"
+  options = [
+    { value = "start", label_key = "settings.gesture_map.launcher_workspace_edge.start" },
+    { value = "end", label_key = "settings.gesture_map.launcher_workspace_edge.end" },
+  ]
+
+  [[widget.setting]]
+  key = "launcher_glyph"
+  type = "string"
+  label_key = "settings.gesture_map.launcher_glyph.label"
+  description_key = "settings.gesture_map.launcher_glyph.description"
+  default = "apps"
+
+  [[widget.setting]]
+  key = "dominant_axis_progress"
+  type = "bool"
+  label_key = "settings.gesture_map.dominant_axis_progress.label"
+  description_key = "settings.gesture_map.dominant_axis_progress.description"
+  default = false
+
+  [[widget.setting]]
+  key = "dynamic_progress_opacity"
+  type = "bool"
+  label_key = "settings.gesture_map.dynamic_progress_opacity.label"
+  description_key = "settings.gesture_map.dynamic_progress_opacity.description"
+  default = false
+
+  [[widget.setting]]
+  key = "hide_empty_workspaces"
+  type = "bool"
+  label_key = "settings.gesture_map.hide_empty_workspaces.label"
+  description_key = "settings.gesture_map.hide_empty_workspaces.description"
+  default = false
+
+  [[widget.setting]]
+  key = "workspace_badge_radius"
+  type = "int"
+  label_key = "settings.gesture_map.workspace_badge_radius.label"
+  description_key = "settings.gesture_map.workspace_badge_radius.description"
+  default = 6
+  min = 0
+  max = 24
 
   [[widget.setting]]
   key = "widget_width"

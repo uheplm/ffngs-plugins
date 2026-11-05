@@ -19,13 +19,82 @@
         "horizontal": "Horizontal",
         "vertical": "Vertical"
       },
+      "show_progress_when_inactive": {
+        "label": "Show progress when inactive",
+        "description": "Keep progress strips visible when no gesture is in progress. Hiding them animates the strip out."
+      },
+      "shrink_inactive_workspace_pills": {
+        "label": "Shrink inactive workspace pills (Y-axis only)",
+        "description": "Make inactive workspace pills square and show only their icon or index. This setting only affects the Y-axis map."
+      },
+      "workspace_pill_width": {
+        "label": "Workspace pill width (Y-axis)",
+        "description": "Fixed width in pixels for workspace pills in the Y-axis map."
+      },
+      "workspace_pill_height": {
+        "label": "Workspace pill height (Y-axis)",
+        "description": "Fixed height in pixels for workspace pills in the Y-axis map."
+      },
+      "animate_workspace_pill_resizing": {
+        "label": "Animate workspace pill resizing",
+        "description": "Animate workspace pills between square and full size in the Y-axis map."
+      },
+      "workspace_pill_resize_duration": {
+        "label": "Workspace pill resize duration",
+        "description": "Duration in milliseconds for workspace pill resize animation."
+      },
+      "open_launcher_on_empty_workspace": {
+        "label": "Open Launcher on empty workspace",
+        "description": "In X-axis mode, show a plus button when the focused workspace is empty; click it to open the Noctalia launcher."
+      },
+      "launcher_opening_command": {
+        "label": "Launcher opening command",
+        "description": "Shell command used to open the launcher from the empty-workspace button or on focus. Defaults to the Noctalia launcher IPC command."
+      },
+      "open_launcher_on_focus": {
+        "label": "Open Launcher on focus",
+        "description": "Automatically run the opening command when the focused workspace becomes empty."
+      },
+      "close_launcher_leaving_empty_workspace": {
+        "label": "Close launcher leaving empty workspace",
+        "description": "Close the Noctalia launcher when focus leaves an empty workspace."
+      },
+      "open_launcher_at_workspace_edge": {
+        "label": "Open Launcher at workspace edge",
+        "description": "Open the launcher when a gesture reaches the configured edge of the focused workspace."
+      },
+      "launcher_workspace_edge": {
+        "label": "Launcher workspace edge",
+        "start": "Start (left)",
+        "end": "End (right)"
+      },
+      "launcher_glyph": {
+        "label": "Launcher glyph",
+        "description": "Noctalia glyph shown at the configured end of the X-axis progress bar when gesturing toward a workspace edge."
+      },
+      "dominant_axis_progress": {
+        "label": "Show progress only for the dominant axis",
+        "description": "Suppress this map's progress when movement is more strongly aligned with the other axis. Enable on both maps to avoid simultaneous X and Y progress; X wins ties."
+      },
+      "dynamic_progress_opacity": {
+        "label": "Dynamic progress opacity",
+        "description": "Fade the progress bar from transparent to fully opaque as gesture progress increases."
+      },
+      "hide_empty_workspaces": {
+        "label": "Hide empty workspaces",
+        "description": "Hide workspaces that have no windows in the Y-axis workspace map."
+      },
+      "workspace_badge_radius": {
+        "label": "Workspace badge corner radius",
+        "description": "Corner radius in pixels for the workspace name or glyph badge."
+      },
       "widget_width": {
-        "label": "Widget layout size",
-        "description": "Map size in pixels along its layout direction."
+        "label": "X-axis map layout size",
+        "description": "X-axis columns map size in pixels along its layout direction."
       },
       "target_min_width_percent": {
-        "label": "Target pill minimum size",
-        "description": "Minimum target pill width in horizontal layout or height in vertical layout, as a percentage of the configured widget layout size."
+        "label": "X-axis target pill minimum size",
+        "description": "Minimum column pill width in horizontal layout or height in vertical layout, as a percentage of the configured X-axis map layout size."
       },
       "pill_radius": {
         "label": "Target pill corner radius",

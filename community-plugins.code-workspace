@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../../.local/src/nnmxd"
+		}
+	],
+	"settings": {
+		"luau-lsp.platform.type": "standard",
+		"luau-lsp.types.definitionFiles": {
+			"noctalia": "noctalia.d.luau"
+		}
+	}
+}
